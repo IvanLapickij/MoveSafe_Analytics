@@ -1,33 +1,39 @@
-import cv2
+
+#reference video https://blog.roboflow.com/getting-started-with-roboflow/
+#reference documentation https://docs.roboflow.com/workflows/deploy-a-workflow
+#reference Roboflow football project video https://www.youtube.com/watch?v=aBVGKoNZQUw&t
+
+#1.Run Docker server clever_noether
+
+#2.Run comman to project camera view to pipeline using terminal
+#ffmpeg -f dshow -rtbufsize 256M -i video="Integrated Camera" -preset ultrafast -tune zerolatency -f flv rtmp://192.168.0.170:1935/stream
+
+#3. run python appclication
+# Import the InferencePipeline object
 from inference import InferencePipeline
 from inference.core.interfaces.stream.sinks import render_boxes
 
-# Define the RTMP stream URL
-RTMP_STREAM_URL = "rtmp://192.168.0.170:1935/stream"
+#Lenovo
+RTMP_STREAM_URL = "rtmp://127.0.0.1:1935/stream"
 
-# Define a custom `on_prediction` function
-def custom_on_prediction(pipeline, data):
-    if hasattr(data, "predictions"):  # Ensure predictions are available
-        predictions = data.predictions  # Access predictions
-        for prediction in predictions:
-            detected_class = prediction.get("class")
-            if detected_class == "Paper":  # Check if the detected class is "Paper"
-                print("It's a Paper!")
-            else: print('ups')
+#MSI
+# RTMP_STREAM_URL = "rtmp://192.168.0.170:1935/stream"
 
-    # Optionally, pass the data to render_boxes for visualization
-    render_boxes(pipeline, data)
+#do something with the predictions of each frame
+def my_sink(result, video_frame):
+    
+    # Visualize detections on the video stream
+    render_boxes(result, video_frame)
+    print(result) # prints result of each frame
+    
 
-# Create an inference pipeline object
+# initialize a pipeline object
 pipeline = InferencePipeline.init(
-    model_id="rock-paper-scissors-sxsw/14",  # Model ID
-    video_reference=RTMP_STREAM_URL,  # RTMP stream as the video source
-    on_prediction=custom_on_prediction,  # Use the custom function for predictions
-    api_key="tvZVhjN9hMWkURbVo84w",  # Roboflow API key
+    api_key="tvZVhjN9hMWkURbVo84w",
+    model_id="rock-paper-scissors-sxsw/14",
+    video_reference=RTMP_STREAM_URL, # Path to video, RSTP stream, device id (int, usually 0 for built in webcams), or RTSP stream url
+    on_prediction=my_sink
 )
+pipeline.start() #start the pipeline
+pipeline.join() #wait for the pipeline thread to finish
 
-# Start the pipeline
-pipeline.start()
-
-# Wait for the pipeline to finish
-pipeline.join()

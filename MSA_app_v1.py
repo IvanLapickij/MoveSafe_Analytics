@@ -2,6 +2,9 @@
 #reference video https://blog.roboflow.com/getting-started-with-roboflow/
 #reference documentation https://docs.roboflow.com/workflows/deploy-a-workflow
 #reference Roboflow football project video https://www.youtube.com/watch?v=aBVGKoNZQUw&t
+#Check for devices(camera)
+#ffmpeg -list_devices true -f dshow -i dummy
+
 
 #1.Run Docker server clever_noether
 

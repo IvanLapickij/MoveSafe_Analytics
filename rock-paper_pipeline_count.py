@@ -5,8 +5,11 @@
 
 #1.Run Docker server clever_noether
 
-#2.Run comman to project camera view to pipeline using terminal
+#2.1 Run comman to project camera view to pipeline using terminal
 #ffmpeg -f dshow -rtbufsize 256M -i video="Integrated Camera" -preset ultrafast -tune zerolatency -f flv rtmp://192.168.0.170:1935/stream
+
+#2.2 Run 10 fps
+#ffmpeg -f dshow  -rtbufsize 256M  -i video="Integrated Camera"  -vf fps=10  -preset ultrafast -tune zerolatency  -f flv rtmp://127.168.0.170:1935/stream
 
 #3. run python appclication
 # Import the InferencePipeline object

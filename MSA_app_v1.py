@@ -13,11 +13,11 @@
 from inference import InferencePipeline
 from inference.core.interfaces.stream.sinks import render_boxes
 
-# Video samples
-# RTMP_STREAM_URL = "videos/bundesliga1.mp4"
+#Video samples
+RTMP_STREAM_URL = "videos/bundesliga1.mp4"
 
 #Lenovo
-RTMP_STREAM_URL = "rtmp://127.0.0.1:1935/stream"
+# RTMP_STREAM_URL = "rtmp://127.0.0.1:1935/stream"
 
 #MSI
 # RTMP_STREAM_URL = "rtmp://192.168.0.170:1935/stream"

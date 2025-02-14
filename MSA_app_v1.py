@@ -1,17 +1,3 @@
-
-#reference video https://blog.roboflow.com/getting-started-with-roboflow/
-#reference documentation https://docs.roboflow.com/workflows/deploy-a-workflow
-#reference Roboflow football project video https://www.youtube.com/watch?v=aBVGKoNZQUw&t
-#Check for devices(camera)
-#ffmpeg -list_devices true -f dshow -i dummy
-
-
-#1.Run Docker server clever_noether
-
-#2.Run comman to project camera view to pipeline using terminal
-#ffmpeg -f dshow -rtbufsize 256M -i video="Integrated Camera" -preset ultrafast -tune zerolatency -f flv rtmp://192.168.0.170:1935/stream
-
-#3. run python appclication
 # Import the InferencePipeline object
 from inference import InferencePipeline
 from inference.core.interfaces.stream.sinks import render_boxes

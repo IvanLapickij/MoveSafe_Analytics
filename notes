@@ -11,7 +11,7 @@ print("Model loaded:", HANDS_SIGN_MODEL)
 #reference Roboflow football project video https://www.youtube.com/watch?v=aBVGKoNZQUw&t
 #Check for devices(camera)
 #ffmpeg -list_devices true -f dshow -i dummy
-
+#videos\bundesliga1.mp4
 
 #1.Run Docker server clever_noether
 

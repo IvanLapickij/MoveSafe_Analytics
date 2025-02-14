@@ -4,6 +4,7 @@ from PIL import Image, ImageTk
 import cv2
 import time
 import threading
+from ultralytics import YOLO  # Make sure to install ultralytics (pip install ultralytics)
 
 #############################
 # Global Variables
@@ -11,10 +12,14 @@ import threading
 stop_rtmp_flag = False
 rtmp_thread = None
 
-latest_frame = None
+latest_frame = None  # The most recent frame from the RTMP stream
 
-stop_pipeline_flag = False
-pipeline_thread = None
+# Global variables for model overlay/inference
+model_active = False       # Whether a model overlay/inference is active
+active_model = None        # The name of the active model (string)
+annotated_frame = None     # The frame with YOLO annotations (if applicable)
+yolo_model = None          # The YOLO model instance
+yolo_thread = None         # Thread for running YOLO inference
 
 # Global variables for recording
 recording = False
@@ -80,15 +85,13 @@ def on_escape(event):
     """
     root.quit()
 
-
 #############################
 # Main Functions
 #############################
 def show_stream():
     """
-    Called when 'Show Stream' button is clicked.
-    1) Stop any existing RTMP thread or pipeline.
-    2) Start a new thread that captures from the RTMP URL.
+    Called when 'Show Stream' is clicked.
+    Starts an RTMP thread that continuously updates latest_frame.
     """
     global stop_rtmp_flag, rtmp_thread
 
@@ -99,9 +102,8 @@ def show_stream():
         messagebox.showwarning("No RTMP URL", "Please enter an RTMP URL.")
         return
 
-    # Stop any running pipeline or previous RTMP capture.
+    # Stop any running RTMP capture.
     stop_rtmp()
-    stop_model()
 
     stop_rtmp_flag = False
 
@@ -128,11 +130,9 @@ def show_stream():
     rtmp_thread.start()
     print("[INFO] RTMP thread started.")
 
-
 def stop_rtmp():
     """
-    Signals the RTMP capture thread to stop and waits for it to exit.
-    Also clears the video frame in the GUI.
+    Stops the RTMP thread and clears the displayed frame.
     """
     global stop_rtmp_flag, rtmp_thread, latest_frame
     print("[INFO] stop_rtmp() called.")
@@ -146,123 +146,118 @@ def stop_rtmp():
     video_label.config(image="", text="No Video", fg="white")
     print("[INFO] RTMP capture stopped (thread joined).")
 
-
 def run_model():
     """
-    Called when 'Start Model' button is clicked.
-    Stops any active RTMP stream and previous pipeline, then starts the model inference pipeline.
+    Called when 'Start Model' is clicked.
+    For "YOLO Pose", the YOLO model is loaded and inference starts in a dedicated thread.
+    For other models, a simple text overlay is drawn.
     """
+    global model_active, active_model, yolo_model, yolo_thread
     print("[INFO] Start Model clicked.")
-    # Stop RTMP so that only the pipeline runs.
-    stop_rtmp()
-    # Stop any old pipeline if running.
-    stop_model()
-    # Start the model inference pipeline.
-    start_pipeline_inference()
+    if latest_frame is None:
+        messagebox.showwarning("No Stream", "RTMP stream is not active. Please start the stream first.")
+        return
 
+    chosen_model = model_var.get()
+    active_model = chosen_model
+    model_active = True
+
+    if chosen_model == "YOLO Pose":
+        try:
+            yolo_model = YOLO("yolo11n-pose.pt")
+        except Exception as e:
+            messagebox.showerror("Model Error", f"Failed to load YOLO Pose model: {e}")
+            model_active = False
+            return
+        # Start the YOLO inference thread
+        yolo_thread = threading.Thread(target=yolo_inference, daemon=True)
+        yolo_thread.start()
+        print("[INFO] YOLO Pose inference started.")
+    else:
+        # For other models, we simply overlay the model name.
+        print(f"[INFO] Model overlay activated: {chosen_model}")
 
 def stop_model():
     """
-    Stops the inference pipeline if it is running.
+    Stops any active model overlay/inference.
+    If YOLO inference is running, signal it to stop.
     """
-    global stop_pipeline_flag, pipeline_thread, latest_frame
-    print("[INFO] stop_model() called.")
-
-    stop_pipeline_flag = True
-    if pipeline_thread and pipeline_thread.is_alive():
-        pipeline_thread.join()
-        pipeline_thread = None
-        print("[INFO] Pipeline thread joined successfully.")
-
-    # Clear the frame so the GUI can show "No Video"
-    latest_frame = None
-    video_label.config(image="", text="No Video", fg="white")
-
+    global model_active, active_model, yolo_thread
+    print("[INFO] Stop Model clicked.")
+    model_active = False
+    active_model = None
+    # If the YOLO thread is running, join it.
+    if yolo_thread and yolo_thread.is_alive():
+        yolo_thread.join()
+    # Clear the annotated frame
+    global annotated_frame
+    annotated_frame = None
 
 #############################
-# Pipeline (Model Inference) Implementation
+# YOLO Inference Thread Function
 #############################
-def start_pipeline_inference():
+def yolo_inference():
     """
-    Starts a new thread that simulates running a model inference pipeline.
-    In this demo, we capture from the local webcam and overlay the chosen model name.
+    Runs YOLO Pose inference on the latest_frame in a loop.
+    Each frame is processed and the annotated result is stored in annotated_frame.
     """
-    global pipeline_thread, stop_pipeline_flag
-    print("[INFO] start_pipeline_inference called.")
-
-    # Make sure no previous pipeline is running.
-    stop_model()
-
-    stop_pipeline_flag = False
-
-    def pipeline_loop():
-        global latest_frame, stop_pipeline_flag
-        print("[INFO] Pipeline loop started.")
-
-        # Open a video capture source (e.g., webcam 0)
-        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-        if not cap.isOpened():
-            print("[ERROR] Could not open video source for model inference.")
-            stop_pipeline_flag = True
-            return
-
-        # Get the selected model from the combobox.
-        chosen_model = model_var.get()
-        print(f"[INFO] Running inference with model: {chosen_model}")
-
-        while not stop_pipeline_flag:
-            ret, frame = cap.read()
-            if not ret:
-                print("[ERROR] Could not read frame from video source.")
-                break
-
-            # Simulate inference by overlaying text on the frame.
-            if chosen_model:
-                cv2.putText(
-                    frame,
-                    f"Model: {chosen_model}",
-                    (50, 50),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    (0, 255, 0),
-                    2,
-                    cv2.LINE_AA,
-                )
-            latest_frame = frame
-            time.sleep(0.03)  # ~30 fps
-
-        cap.release()
-        print("[INFO] Pipeline loop ended.")
-
-    pipeline_thread = threading.Thread(target=pipeline_loop, daemon=True)
-    pipeline_thread.start()
-    print("[INFO] Pipeline thread started.")
-
+    global latest_frame, annotated_frame, model_active, yolo_model
+    while model_active:
+        if latest_frame is not None:
+            # Copy the current frame for inference
+            frame = latest_frame.copy()
+            try:
+                # Predict on the single frame; stream=False returns a list of results.
+                results = yolo_model.predict(frame, stream=False)
+                if results:
+                    # Assume one result and get the annotated frame.
+                    result = results[0]
+                    annotated = result.plot()  # This returns an annotated numpy array.
+                    annotated_frame = annotated
+            except Exception as e:
+                print(f"[ERROR] YOLO inference error: {e}")
+        time.sleep(0.03)
 
 #############################
 # Update Frame (Display Video)
 #############################
 def update_frame():
-    global latest_frame, video_writer, recording
+    global latest_frame, video_writer, recording, model_active, active_model, annotated_frame
     if latest_frame is None:
         video_label.config(text="No Video", image="")
     else:
         try:
-            # Convert from BGR to RGB for Tkinter/PIL.
-            frame_rgb = cv2.cvtColor(latest_frame, cv2.COLOR_BGR2RGB)
+            # If YOLO Pose is active and we have an annotated frame, display it.
+            if model_active and active_model == "YOLO Pose" and annotated_frame is not None:
+                frame_to_show = annotated_frame.copy()
+            else:
+                # Otherwise, use the latest RTMP frame.
+                frame_to_show = latest_frame.copy()
+                # For other models, overlay the model name.
+                if model_active and active_model != "YOLO Pose":
+                    cv2.putText(
+                        frame_to_show,
+                        f"Model: {active_model}",
+                        (50, 50),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        1,
+                        (0, 255, 0),
+                        2,
+                        cv2.LINE_AA,
+                    )
+            frame_rgb = cv2.cvtColor(frame_to_show, cv2.COLOR_BGR2RGB)
             img = Image.fromarray(frame_rgb)
             imgtk = ImageTk.PhotoImage(image=img)
             video_label.config(image=imgtk, text="")
-            video_label.image = imgtk  # keep a reference!
+            video_label.image = imgtk  # Keep a reference!
             
-            # If recording is active, write the original BGR frame to file.
+            # If recording is active, write the combined frame (stream + overlay) to file.
             if recording and video_writer is not None:
-                video_writer.write(latest_frame)
+                video_writer.write(frame_to_show)
         except Exception as e:
             print("[ERROR] Could not display frame:", e)
             video_label.config(image="", text="No Video")
     root.after(50, update_frame)
-
 
 #############################
 # Build the GUI
@@ -275,7 +270,7 @@ root.attributes("-fullscreen", True)
 
 # Dark theme styling with Ttk.
 style = ttk.Style()
-style.theme_use("clam")  # or use 'alt', etc.
+style.theme_use("clam")
 root.configure(bg="black")
 
 style.configure("TFrame", background="black")
@@ -332,15 +327,17 @@ btn_stop_stream.grid(row=0, column=1, padx=5)
 model_label = ttk.Label(left_frame, text="Choose Model:")
 model_label.pack(pady=(20, 5))
 
-model_var = tk.StringVar()
+# Add "YOLO Pose" as an option along with your other models.
 model_options = [
+    "YOLO Pose",
     "rock-paper-scissors-sxsw/14",
     "football-players-detection-3zvbc/12",
     "some-other-model-id/1"
 ]
+model_var = tk.StringVar()
 model_combo = ttk.Combobox(left_frame, textvariable=model_var, values=model_options, state="readonly")
 model_combo.pack(pady=(0, 20))
-model_combo.current(0)  # Optionally set a default
+model_combo.current(0)  # Optionally set a default (here "YOLO Pose")
 
 model_button_frame = ttk.Frame(left_frame)
 model_button_frame.pack(pady=10)

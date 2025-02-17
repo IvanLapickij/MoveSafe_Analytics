@@ -1,3 +1,4 @@
+import os
 import tkinter as tk
 from tkinter import ttk, messagebox
 from PIL import Image, ImageTk
@@ -7,10 +8,11 @@ import threading
 import numpy as np
 from ultralytics import YOLO  # For YOLO Pose
 
-# For Roboflow football model inference
+# For Roboflow football model inference (using inference-gpu)
 from inference import get_model
 ROBOFLOW_API_KEY = "tvZVhjN9hMWkURbVo84w"
-PLAYER_DETECTION_MODEL_ID = "football-players-detection-3zvbc/11"  # Use the ID from your sample
+PLAYER_DETECTION_MODEL_ID = "football-players-detection-3zvbc/11"  # Use your model ID
+
 
 # Import supervision for annotation
 try:
@@ -23,31 +25,30 @@ box_annotator = sv.BoxAnnotator(
     color=sv.ColorPalette.from_hex(['#FF8C00', '#00BFFF', '#FF1493', '#FFD700']),
     thickness=2
 )
+# We'll override the default label_annotator later for football-specific annotation.
 label_annotator = sv.LabelAnnotator(
     color=sv.ColorPalette.from_hex(['#FF8C00', '#00BFFF', '#FF1493', '#FFD700']),
     text_color=sv.Color.from_hex('#000000')
 )
 
-#############################
-# Global Variables
-#############################
+# --- Global Variables ---
 stop_rtmp_flag = False
 rtmp_thread = None
-latest_frame = None  # Raw frame from RTMP
+latest_frame = None    # Raw frame from the video source
 
 # Inference globals
-model_active = False       # True when a model inference is active
-active_model = None        # Name of the selected model
-annotated_frame = None     # Frame after model annotations
+model_active = False   # True when any model inference is active
+active_model = None    # Name of the selected model
+annotated_frame = None # Frame after model annotations
 
-# YOLO Pose
+# YOLO Pose globals
 yolo_model = None
 yolo_thread = None
 
-# Rock-Paper-Scissors (RPS)
+# RPS globals
 rps_thread = None
 
-# Football Detection model (Roboflow)
+# Football Detection globals
 football_thread = None
 football_model = None  # Will hold the loaded football model
 
@@ -55,17 +56,39 @@ football_model = None  # Will hold the loaded football model
 recording = False
 video_writer = None
 
-# FPS control (default 20 FPS)
+# FPS control (default 60 FPS)
 root = tk.Tk()
-fps_value = tk.IntVar(root, value=20)
+fps_value = tk.IntVar(root, value=60)
 
-#############################
-# Inference Helper Functions
-#############################
+# --- Additional globals for Football Tracking and Annotation ---
+BALL_ID = 0  # Assumed ball class ID
+tracker = sv.ByteTrack()  # Initialize ByteTrack tracker
+tracker.reset()
+
+# Football-specific annotators:
+ellipse_annotator = sv.EllipseAnnotator(
+    color=sv.ColorPalette.from_hex(['#00BFFF', '#FF1493', '#FFD700']),
+    thickness=2
+)
+# Use a label annotator with bottom-center text placement
+label_annotator = sv.LabelAnnotator(
+    color=sv.ColorPalette.from_hex(['#00BFFF', '#FF1493', '#FFD700']),
+    text_color=sv.Color.from_hex('#000000'),
+    text_position=sv.Position.BOTTOM_CENTER
+)
+triangle_annotator = sv.TriangleAnnotator(
+    color=sv.Color.from_hex('#FFD700'),
+    base=25,
+    height=21,
+    outline_thickness=1
+)
+
+# --- Inference Helper Functions ---
+
 def my_sink(result, video_frame):
     """
     Simulated callback for RPS.
-    Here we simply draw blue boxes for the RPS result.
+    Draws blue boxes and prediction text.
     """
     for box in result.get("boxes", []):
         x1, y1, x2, y2 = box
@@ -83,7 +106,6 @@ def rps_inference():
         if latest_frame is not None:
             frame = latest_frame.copy()
             try:
-                # Simulated result for RPS inference.
                 result = {
                     "boxes": [(50, 50, 150, 150)],
                     "prediction": "rock"  # Could be "paper" or "scissors"
@@ -115,34 +137,61 @@ def yolo_inference():
 def football_inference():
     """
     Runs football detection inference on the current frame using the Roboflow model.
-    It calls the model's infer method, converts the result into a supervision Detections
-    object, creates labels, and then uses the annotators to draw boxes and labels.
+    To improve performance:
+      - Only every Nth frame is processed.
+      - The frame is resized (downscaled) before inference.
+    After inference, detection coordinates are scaled back to the original resolution.
+    Player detections (non-ball) are tracked with ByteTrack and annotated with ellipse and label annotators.
+    Ball detections are padded and annotated with a triangle annotator.
     """
-    global latest_frame, annotated_frame, model_active, football_model
+    global latest_frame, annotated_frame, model_active, football_model, tracker
+    frame_counter = 0
+    process_every = 1  # Process every 3rd frame; adjust as needed.
+    scale_factor = 0.5  # Downscale factor (e.g., 0.5 means half resolution)
+    
     while model_active:
         if latest_frame is not None:
+            frame_counter += 1
             frame = latest_frame.copy()
-            try:
-                # Run inference with the football model (confidence threshold 0.3)
-                result = football_model.infer(frame, confidence=0.3)[0]
-                # Convert the result to a Supervision Detections object.
-                detections = sv.Detections.from_inference(result)
-                # Create labels combining class name and confidence.
-                labels = [
-                    f"{class_name} {confidence:.2f}"
-                    for class_name, confidence in zip(detections['class_name'], detections.confidence)
-                ]
-                # Annotate the frame.
-                annotated = box_annotator.annotate(frame.copy(), detections)
-                annotated = label_annotator.annotate(annotated, detections, labels)
-                annotated_frame = annotated
-            except Exception as e:
-                print(f"[ERROR] Football inference error: {e}")
+            if frame_counter % process_every == 0:
+                try:
+                    original_h, original_w = frame.shape[:2]
+                    # Resize the frame for faster inference.
+                    small_frame = cv2.resize(frame, (int(original_w * scale_factor), int(original_h * scale_factor)))
+                    
+                    # Run inference on the downscaled frame.
+                    result = football_model.infer(small_frame, confidence=0.3)[0]
+                    # Convert the result into a Supervision Detections object.
+                    detections = sv.Detections.from_inference(result)
+                    # Scale detection coordinates back to the original resolution.
+                    detections.xyxy = detections.xyxy / scale_factor
+                    
+                    # Separate ball detections (BALL_ID) and pad boxes.
+                    ball_detections = detections[detections.class_id == BALL_ID]
+                    ball_detections.xyxy = sv.pad_boxes(xyxy=ball_detections.xyxy, px=10)
+                    
+                    # Get player detections (non-ball) and apply NMS.
+                    all_detections = detections[detections.class_id != BALL_ID]
+                    all_detections = all_detections.with_nms(threshold=0.5, class_agnostic=True)
+                    all_detections.class_id -= 1  # Adjust if needed
+                    
+                    # Update the tracker with player detections.
+                    tracked_detections = tracker.update_with_detections(detections=all_detections)
+                    # Generate tracker labels.
+                    labels = [f"#{tracker_id}" for tracker_id in tracked_detections.tracker_id]
+                    
+                    # Annotate the frame:
+                    annotated = ellipse_annotator.annotate(scene=frame.copy(), detections=tracked_detections)
+                    annotated = label_annotator.annotate(scene=annotated, detections=tracked_detections, labels=labels)
+                    annotated = triangle_annotator.annotate(scene=annotated, detections=ball_detections)
+                    
+                    annotated_frame = annotated
+                except Exception as e:
+                    print(f"[ERROR] Football inference error: {e}")
         time.sleep(0.03)
 
-#############################
-# Button Command Functions
-#############################
+# --- Button Command Functions ---
+
 def on_show_stream():
     show_stream()
 
@@ -188,54 +237,53 @@ def on_stop_recording():
 def on_escape(event):
     root.quit()
 
-#############################
-# Main Functions
-#############################
+# --- Main Functions for Stream and Model Handling ---
+
 def show_stream():
     """
-    Starts a background thread that reads the RTMP stream and updates latest_frame.
+    Starts a background thread that reads frames from the video source and updates latest_frame.
     """
     global stop_rtmp_flag, rtmp_thread
     print("[INFO] 'Show Stream' button clicked.")
     rtmp_url = url_entry.get()
     if not rtmp_url:
-        messagebox.showwarning("No RTMP URL", "Please enter an RTMP URL.")
+        messagebox.showwarning("No Video URL", "Please enter a video URL.")
         return
     stop_rtmp()
     stop_rtmp_flag = False
     def rtmp_loop():
-        print(f"[INFO] RTMP loop started with URL = {rtmp_url}")
+        print(f"[INFO] Video stream started with URL = {rtmp_url}")
         cap = cv2.VideoCapture(rtmp_url)
         if not cap.isOpened():
-            print("[ERROR] Could not open RTMP stream.")
+            print("[ERROR] Could not open video stream.")
             return
         while not stop_rtmp_flag:
             ret, frame = cap.read()
             if not ret:
-                print("[ERROR] Failed to read frame from RTMP stream.")
+                print("[ERROR] Failed to read frame from video stream.")
                 break
             global latest_frame
             latest_frame = frame
             time.sleep(0.03)
         cap.release()
-        print("[INFO] RTMP capture loop ended.")
+        print("[INFO] Video stream ended.")
     rtmp_thread = threading.Thread(target=rtmp_loop, daemon=True)
     rtmp_thread.start()
-    print("[INFO] RTMP thread started.")
+    print("[INFO] Stream thread started.")
 
 def stop_rtmp():
     """
-    Stops the RTMP stream thread and clears the displayed frame.
+    Stops the video stream thread and clears the displayed frame.
     """
     global stop_rtmp_flag, rtmp_thread, latest_frame
-    print("[INFO] stop_rtmp() called.")
+    print("[INFO] Stopping stream.")
     stop_rtmp_flag = True
     if rtmp_thread and rtmp_thread.is_alive():
         rtmp_thread.join()
     rtmp_thread = None
     latest_frame = None
     video_label.config(image="", text="No Video", fg="white")
-    print("[INFO] RTMP capture stopped (thread joined).")
+    print("[INFO] Stream stopped.")
 
 def run_model():
     """
@@ -244,7 +292,7 @@ def run_model():
     global model_active, active_model, yolo_model, yolo_thread, rps_thread, football_thread, football_model
     print("[INFO] Start Model clicked.")
     if latest_frame is None:
-        messagebox.showwarning("No Stream", "RTMP stream is not active. Please start the stream first.")
+        messagebox.showwarning("No Stream", "Video stream is not active. Please start the stream first.")
         return
     chosen_model = model_var.get()
     active_model = chosen_model
@@ -264,7 +312,6 @@ def run_model():
         rps_thread.start()
         print("[INFO] RPS inference started.")
     elif chosen_model == "football-players-detection-3zvbc/11":
-        # Load the football model only once.
         if football_model is None:
             try:
                 football_model = get_model(model_id=PLAYER_DETECTION_MODEL_ID, api_key=ROBOFLOW_API_KEY)
@@ -294,16 +341,16 @@ def stop_model():
         football_thread.join()
     annotated_frame = None
 
-#############################
-# Update Frame (Display Video)
-#############################
 def update_frame():
+    """
+    Updates the video display with the latest frame (annotated if a model is active).
+    The update interval is controlled by the FPS slider.
+    """
     global latest_frame, video_writer, recording, model_active, active_model, annotated_frame
     if latest_frame is None:
         video_label.config(text="No Video", image="")
     else:
         try:
-            # Use the annotated frame if a model is active and available.
             if model_active:
                 if annotated_frame is not None:
                     frame_to_show = annotated_frame.copy()
@@ -324,16 +371,13 @@ def update_frame():
         except Exception as e:
             print("[ERROR] Could not display frame:", e)
             video_label.config(image="", text="No Video")
-    # Adjust update interval based on FPS slider.
     current_fps = fps_value.get()
     if current_fps <= 0:
-        current_fps = 20
+        current_fps = 60
     delay = int(1000 / current_fps)
     root.after(delay, update_frame)
 
-#############################
-# Build the GUI
-#############################
+# --- Build the GUI ---
 root.title("Full-Screen Dark UI")
 root.attributes("-fullscreen", True)
 
@@ -362,10 +406,11 @@ bottom_frame = ttk.Frame(right_frame, height=200)
 bottom_frame.pack(side=tk.BOTTOM, fill=tk.X)
 
 # Left Menu Panel
-url_label = ttk.Label(left_frame, text="RTMP URL:")
+url_label = ttk.Label(left_frame, text="VIDEO URL:")
 url_label.pack(pady=(20, 5))
 url_entry = ttk.Entry(left_frame, width=25)
-url_entry.insert(0, "rtmp://127.0.0.1:1935/stream")
+# For testing, we use a local video file; change this to your RTMP URL if needed.
+url_entry.insert(0, "videos/bundesliga4.mp4")
 url_entry.pack(pady=(0, 20))
 
 # FPS Slider

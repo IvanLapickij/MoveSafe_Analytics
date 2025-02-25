@@ -5,7 +5,7 @@ HANDS_SIGN_MODEL = get_model(model_id=HANDS_SIGN_MODEL_ID, api_key=ROBOFLOW_API_
 
 # Print to confirm the model is loaded successfully
 print("Model loaded:", HANDS_SIGN_MODEL)
-
+pip install --upgrade inference
 #reference video https://blog.roboflow.com/getting-started-with-roboflow/
 #reference documentation https://docs.roboflow.com/workflows/deploy-a-workflow
 #reference Roboflow football project video https://www.youtube.com/watch?v=aBVGKoNZQUw&t
@@ -15,7 +15,11 @@ print("Model loaded:", HANDS_SIGN_MODEL)
 
 #1.Run Docker server clever_noether
 
-#2.Run comman to project camera view to pipeline using terminal
-#ffmpeg -f dshow -rtbufsize 256M -i video="Integrated Camera" -vf fps=10 -preset ultrafast -tune zerolatency -f flv rtmp://192.168.0.170:1935/stream
+#2.1 Open terminal and run to get your ip for RTMP Stream, then insert in DJI Go RTMP Stream
+# link as folows with your ip1,ip2,ip3,ip4 address numbers "rtmp://ip1.ip2.ip3.ip4:1935/stream"
+ipconfig
+#2.2 Run comman to project camera view to pipeline using terminal
+ffmpeg -f dshow -rtbufsize 256M -i video="Integrated Camera" -vf fps=10 -preset ultrafast -tune zerolatency -f flv rtmp://192.168.0.170:1935/stream
 
-#3. run python appclication
+#3. run python appclication#
+rtmp://192.168.247.179:1935/stream

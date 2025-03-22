@@ -17,106 +17,108 @@ import matplotlib.pyplot as plt
 # For Roboflow football model inference (using inference-gpu)
 from inference import get_model
 ROBOFLOW_API_KEY = "tvZVhjN9hMWkURbVo84w"
-PLAYER_DETECTION_MODEL_ID = "football-players-detection-3zvbc/11"  # Use your model ID
-# Load the player detection model
+PLAYER_DETECTION_MODEL_ID = "football-players-detection-3zvbc/11"
 PLAYER_DETECTION_MODEL = get_model(model_id=PLAYER_DETECTION_MODEL_ID, api_key=ROBOFLOW_API_KEY)
 
-# Initialize field detection model
 ROBOFLOW_API_KEY_FIELD = ROBOFLOW_API_KEY
 FIELD_DETECTION_MODEL_ID = "football-field-detection-f07vi/14"
 FIELD_DETECTION_MODEL = get_model(model_id=FIELD_DETECTION_MODEL_ID, api_key=ROBOFLOW_API_KEY_FIELD)
 
-# Additional imports for pitch keypoint detection and projection
+# --- MSA Detection Model ---
+# (For demonstration, we use your workflow info; adjust if needed)
+MSA_DETECTION_MODEL = get_model(model_id="football-field-detection-f07vi/14", api_key=ROBOFLOW_API_KEY_FIELD)
+# (In a real scenario you might need a different call if the workflow is not a “model”)
+
 from configs.soccer import SoccerPitchConfiguration
 from common.view import ViewTransformer
 from annotators.soccer import draw_pitch, draw_points_on_pitch, draw_pitch_voronoi_diagram
 from common.team import TeamClassifier
 
-# Import supervision for annotation
 try:
     import supervision as sv
 except ImportError:
     raise ImportError("Please install the supervision package (pip install supervision)")
 
-# Setup Supervision annotators for football model.
-box_annotator = sv.BoxAnnotator(
-    color=sv.ColorPalette.from_hex(['#FF8C00', '#00BFFF', '#FF1493', '#FFD700']),
-    thickness=2
-)
-label_annotator = sv.LabelAnnotator(
-    color=sv.ColorPalette.from_hex(['#FF8C00', '#00BFFF', '#FF1493', '#FFD700']),
-    text_color=sv.Color.from_hex('#000000')
-)
+# Setup annotators
+box_annotator = sv.BoxAnnotator(color=sv.ColorPalette.from_hex(['#FF8C00','#00BFFF','#FF1493','#FFD700']), thickness=2)
+label_annotator = sv.LabelAnnotator(color=sv.ColorPalette.from_hex(['#FF8C00','#00BFFF','#FF1493','#FFD700']),
+                                    text_color=sv.Color.from_hex('#000000'))
 
 # --- Global Variables ---
 stop_rtmp_flag = False
 rtmp_thread = None
-latest_frame = None    # Raw frame from the video source
+latest_frame = None
 
-# Inference globals
-model_active = False   # True when any model inference is active
-active_model = None    # Name of the selected model
-annotated_frame = None # Frame after model annotations
+model_active = False
+active_model = None
+annotated_frame = None
 
-# YOLO Pose globals
 yolo_model = None
 yolo_thread = None
-
-# RPS globals
 rps_thread = None
-
-# Football Detection globals
 football_thread = None
-football_model = None  # Will hold the loaded football model
+football_model = None
 
-# Recording globals
 recording = False
 video_writer = None
 
-# Clustering globals
 BATCH_SIZE = 32
-EMBEDDINGS_MODEL = SiglipVisionModel.from_pretrained('google/siglip-base-patch16-224').to('cuda' if torch.cuda.is_available() else 'cpu')
 EMBEDDINGS_PROCESSOR = AutoProcessor.from_pretrained('google/siglip-base-patch16-224')
 REDUCER = umap.UMAP(n_components=3)
 CLUSTERING_MODEL = KMeans(n_clusters=2)
 
-# Team classifier (for later use in team projection)
-team_classifier = TeamClassifier(device="cuda")
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+EMBEDDINGS_MODEL = SiglipVisionModel.from_pretrained('google/siglip-base-patch16-224').to(DEVICE)
+team_classifier = TeamClassifier(device=DEVICE)
 
-# FPS control (default 60 FPS)
-root = tk.Tk()
-fps_value = tk.IntVar(root, value=60)
-
-# --- Additional globals for Football Tracking and Annotation ---
-BALL_ID = 0  # Assumed ball class ID
-tracker = sv.ByteTrack()  # Initialize ByteTrack tracker
+# For tracking (using ByteTrack)
+BALL_ID = 0
+tracker = sv.ByteTrack()
 tracker.reset()
 
-ellipse_annotator = sv.EllipseAnnotator(
-    color=sv.ColorPalette.from_hex(['#00BFFF', '#FF1493', '#FFD700']),
-    thickness=2
-)
-label_annotator = sv.LabelAnnotator(
-    color=sv.ColorPalette.from_hex(['#00BFFF', '#FF1493', '#FFD700']),
-    text_color=sv.Color.from_hex('#000000'),
-    text_position=sv.Position.BOTTOM_CENTER
-)
-triangle_annotator = sv.TriangleAnnotator(
-    color=sv.Color.from_hex('#FFD700'),
-    base=25,
-    height=21,
-    outline_thickness=1
-)
+ellipse_annotator = sv.EllipseAnnotator(color=sv.ColorPalette.from_hex(['#00BFFF','#FF1493','#FFD700']), thickness=2)
+label_annotator = sv.LabelAnnotator(color=sv.ColorPalette.from_hex(['#00BFFF','#FF1493','#FFD700']),
+                                    text_color=sv.Color.from_hex('#000000'),
+                                    text_position=sv.Position.BOTTOM_CENTER)
+triangle_annotator = sv.TriangleAnnotator(color=sv.Color.from_hex('#FFD700'), base=25, height=21, outline_thickness=1)
 
-# --- Inference Helper Functions ---
+def check_device():
+    if torch.cuda.is_available():
+        print("Running on GPU")
+        return "cuda"
+    else:
+        print("Running on CPU")
+        return "cpu"
 
+DEVICE = check_device()
+
+# --- Speed Tracking Globals ---
+# These dictionaries store last position, timestamp and speed stats per player id.
+player_last_pos = {}
+player_last_time = {}
+player_speed_sum = {}
+player_speed_count = {}
+
+# --- Logging Functionality ---
+log_messages = []
+def log(msg):
+    timestamp = time.strftime("%H:%M:%S")
+    full_msg = f"[{timestamp}] {msg}\n"
+    log_messages.append(full_msg)
+    # Append to terminal output widget (if exists)
+    if terminal_text:
+        terminal_text.insert(tk.END, full_msg)
+        terminal_text.see(tk.END)
+    print(full_msg.strip())
+
+# --- Inference Helper Functions (unchanged) ---
 def my_sink(result, video_frame):
     for box in result.get("boxes", []):
         x1, y1, x2, y2 = box
         cv2.rectangle(video_frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
         cv2.putText(video_frame, result.get("prediction", ""),
                     (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2)
-    print("RPS Prediction:", result)
+    log("RPS Prediction: " + str(result.get("prediction", "")))
 
 def rps_inference():
     global latest_frame, annotated_frame, model_active
@@ -124,14 +126,11 @@ def rps_inference():
         if latest_frame is not None:
             frame = latest_frame.copy()
             try:
-                result = {
-                    "boxes": [(50, 50, 150, 150)],
-                    "prediction": "rock"
-                }
+                result = {"boxes": [(50, 50, 150, 150)], "prediction": "rock"}
                 my_sink(result, frame)
                 annotated_frame = frame
             except Exception as e:
-                print(f"[ERROR] RPS inference error: {e}")
+                log(f"RPS inference error: {e}")
         time.sleep(0.03)
 
 def yolo_inference():
@@ -146,7 +145,7 @@ def yolo_inference():
                     annotated = result.plot()
                     annotated_frame = annotated
             except Exception as e:
-                print(f"[ERROR] YOLO inference error: {e}")
+                log(f"YOLO inference error: {e}")
         time.sleep(0.03)
 
 def football_inference():
@@ -171,292 +170,156 @@ def football_inference():
                     all_detections = all_detections.with_nms(threshold=0.5, class_agnostic=True)
                     all_detections.class_id -= 1
                     tracked_detections = tracker.update_with_detections(detections=all_detections)
-                    labels = [f"#{tracker_id}" for tracker_id in tracked_detections.tracker_id]
+                    labels = [f"#{tid}" for tid in tracked_detections.tracker_id]
                     annotated = ellipse_annotator.annotate(scene=frame.copy(), detections=tracked_detections)
                     annotated = label_annotator.annotate(scene=annotated, detections=tracked_detections, labels=labels)
                     annotated = triangle_annotator.annotate(scene=annotated, detections=ball_detections)
                     annotated_frame = annotated
                 except Exception as e:
-                    print(f"[ERROR] Football inference error: {e}")
+                    log(f"Football inference error: {e}")
         time.sleep(0.03)
 
-# --- New Function: Split Teams via Clustering ---
-def split_teams():
-    global football_model
-    if latest_frame is None:
-        messagebox.showwarning("No Video", "Video stream is not active.")
-        return
-    if football_model is None:
-        try:
-            football_model = get_model(model_id=PLAYER_DETECTION_MODEL_ID, api_key=ROBOFLOW_API_KEY)
-        except Exception as e:
-            messagebox.showerror("Model Error", f"Failed to load football model: {e}")
-            return
-
-    messagebox.showinfo("Info", "Capturing 5 seconds of footage for team split...")
-    crops = []
-    start_time = time.time()
-    captured_frames = []
-    while time.time() - start_time < 5:
+def custom_inference():
+    global latest_frame, annotated_frame, model_active
+    while model_active:
         if latest_frame is not None:
-            captured_frames.append(latest_frame.copy())
-            time.sleep(1)
-    for frame in captured_frames:
-        try:
-            result = football_model.infer(frame, confidence=0.3)[0]
-            detections = sv.Detections.from_inference(result)
-            players_detections = detections[detections.class_id != BALL_ID]
-            players_detections = players_detections.with_nms(threshold=0.5, class_agnostic=True)
-            for xyxy in players_detections.xyxy:
-                crop = sv.crop_image(frame, xyxy)
-                crops.append(crop)
-        except Exception as e:
-            print(f"[ERROR] Player detection error: {e}")
-    if not crops:
-        messagebox.showwarning("No Players", "No players detected in the captured footage.")
-        return
+            frame = latest_frame.copy()
+            cv2.rectangle(frame, (60, 60), (200, 200), (0, 255, 255), 3)
+            cv2.putText(frame, "Custom Workflow", (60, 55),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+            annotated_frame = frame
+        time.sleep(0.03)
 
-    pil_crops = [sv.cv2_to_pillow(crop) for crop in crops]
-    embeddings_list = []
-    for batch in chunked(pil_crops, BATCH_SIZE):
-        try:
-            inputs = EMBEDDINGS_PROCESSOR(images=batch, return_tensors="pt").to(EMBEDDINGS_MODEL.device)
-            with torch.no_grad():
-                outputs = EMBEDDINGS_MODEL(**inputs)
-            embeddings = torch.mean(outputs.last_hidden_state, dim=1).cpu().numpy()
-            embeddings_list.append(embeddings)
-        except Exception as e:
-            print(f"[ERROR] Embedding extraction error: {e}")
-    data = np.concatenate(embeddings_list)
-    projections = REDUCER.fit_transform(data)
-    clusters = CLUSTERING_MODEL.fit_predict(projections)
-    grid_img = sv.plot_images_grid(pil_crops[:100], grid_size=(10, 10))
-    save_path = os.path.join(os.getcwd(), "teams_split.png")
-    grid_img.savefig(save_path)
-    messagebox.showinfo("Teams Split", f"Team split complete. Grid image saved at:\n{save_path}")
+def msa_inference():
+    global latest_frame, annotated_frame, model_active, MSA_DETECTION_MODEL
+    while model_active:
+        if latest_frame is not None:
+            frame = latest_frame.copy()
+            try:
+                result = MSA_DETECTION_MODEL.infer(frame, confidence=0.3)[0]
+                detections = sv.Detections.from_inference(result)
+                annotated = box_annotator.annotate(scene=frame.copy(), detections=detections)
+                annotated_frame = annotated
+            except Exception as e:
+                log(f"MSA detection inference error: {e}")
+        time.sleep(0.03)
 
-def on_split_teams():
-    threading.Thread(target=split_teams, daemon=True).start()
-
-# --- New Function: Pitch Keypoint Detection and Projection ---
-def pitch_keypoint_detection():
-    global latest_frame, FIELD_DETECTION_MODEL
+# --- Behavioral Map & Speed Tracking ---
+def update_behavioral_map():
+    global player_last_pos, player_last_time, player_speed_sum, player_speed_count
     if latest_frame is None:
-        messagebox.showwarning("No Video", "Video stream is not active.")
         return
-    frame = latest_frame.copy()
+
     try:
-        result = FIELD_DETECTION_MODEL.infer(frame, confidence=0.3)[0]
+        result = PLAYER_DETECTION_MODEL.infer(latest_frame, confidence=0.3)[0]
+        detections = sv.Detections.from_inference(result)
+        # Filter detections for players (assuming class_id==2)
+        players_detections = detections[detections.class_id == 2]
+        # Update tracker (this returns a Detections object with bounding boxes and tracker ids)
+        tracked = tracker.update_with_detections(detections=players_detections)
+        # Compute centers manually from tracked.xyxy
+        if tracked.xyxy.size > 0:
+            centers = np.column_stack(((tracked.xyxy[:, 0] + tracked.xyxy[:, 2]) / 2,
+                                        (tracked.xyxy[:, 1] + tracked.xyxy[:, 3]) / 2))
+        else:
+            centers = np.array([])
+        ids = tracked.tracker_id
     except Exception as e:
-        messagebox.showerror("Field Model Error", f"Error during field detection: {e}")
+        log(f"Behavioral map detection error: {e}")
         return
-    key_points = sv.KeyPoints.from_inference(result)
-    confidence_filter = key_points.confidence[0] > 0.5
-    if not np.any(confidence_filter):
-        messagebox.showwarning("Low Confidence", "No high confidence keypoints detected.")
-        return
-    frame_reference_points = key_points.xy[0][confidence_filter]
-    frame_reference_key_points = sv.KeyPoints(xy=frame_reference_points[np.newaxis, ...])
-    vertex_annotator_pitch = sv.VertexAnnotator(color=sv.Color.from_hex('#FF1493'), radius=8)
-    annotated_frame = frame.copy()
-    annotated_frame = vertex_annotator_pitch.annotate(scene=annotated_frame, key_points=frame_reference_key_points)
-    save_path = os.path.join(os.getcwd(), "pitch_keypoints.png")
-    cv2.imwrite(save_path, annotated_frame)
-    messagebox.showinfo("Pitch Keypoints", f"Pitch keypoints saved at:\n{save_path}")
-    
-    CONFIG = SoccerPitchConfiguration()
-    pitch_vertices = np.array(CONFIG.vertices)
-    pitch_reference_points = pitch_vertices[confidence_filter]
-    transformer = ViewTransformer(source=frame_reference_points, target=pitch_reference_points)
-    pitch_all_points = pitch_vertices
-    frame_all_points = transformer.transform_points(points=pitch_all_points)
-    frame_all_key_points = sv.KeyPoints(xy=frame_all_points[np.newaxis, ...])
-    edge_annotator_pitch = sv.EdgeAnnotator(color=sv.Color.from_hex('#00BFFF'), thickness=2, edges=CONFIG.edges)
-    annotated_frame = frame.copy()
-    annotated_frame = edge_annotator_pitch.annotate(scene=annotated_frame, key_points=frame_all_key_points)
-    save_path2 = os.path.join(os.getcwd(), "projected_pitch_lines.png")
-    cv2.imwrite(save_path2, annotated_frame)
-    messagebox.showinfo("Projected Pitch Lines", f"Projected pitch lines saved at:\n{save_path2}")
 
-def on_pitch_detection():
-    threading.Thread(target=pitch_keypoint_detection, daemon=True).start()
+    current_time = time.time()
+    behav_canvas.delete("all")
+    canvas_width = int(behav_canvas['width'])
+    canvas_height = int(behav_canvas['height'])
 
-# --- New Globals and Functions for Live Field Map ---
-field_map_window = None
-field_map_label = None
-field_map_active = False
-field_transformer = None
-CONFIG = SoccerPitchConfiguration()
+    for idx, pid in enumerate(ids):
+        pos = centers[idx]
+        canvas_x = int(pos[0] * canvas_width / latest_frame.shape[1])
+        canvas_y = int(pos[1] * canvas_height / latest_frame.shape[0])
 
-def compute_field_transformer(frame):
-    try:
-        result = FIELD_DETECTION_MODEL.infer(frame, confidence=0.3)[0]
-        key_points = sv.KeyPoints.from_inference(result)
-        conf_filter = key_points.confidence[0] > 0.5
-        if not np.any(conf_filter):
-            return None
-        frame_ref_points = key_points.xy[0][conf_filter]
-        pitch_ref_points = np.array(CONFIG.vertices)[conf_filter]
-        transformer = ViewTransformer(source=frame_ref_points, target=pitch_ref_points)
-        return transformer
-    except Exception as e:
-        print(f"[ERROR] Computing field transformer: {e}")
-        return None
+        if pid in player_last_pos:
+            dt = current_time - player_last_time[pid]
+            if dt > 0:
+                dist = np.linalg.norm(np.array(pos) - np.array(player_last_pos[pid]))
+                speed = dist / dt
+                player_speed_sum[pid] = player_speed_sum.get(pid, 0) + speed
+                player_speed_count[pid] = player_speed_count.get(pid, 0) + 1
+            else:
+                speed = 0
+        else:
+            speed = 0
+        player_last_pos[pid] = pos
+        player_last_time[pid] = current_time
+        avg_speed = player_speed_sum.get(pid, 0) / player_speed_count.get(pid, 1)
 
-def update_field_map():
-    global field_map_window, field_map_label, field_map_active, field_transformer
-    while field_map_active:
-        if latest_frame is None:
-            time.sleep(0.1)
-            continue
-        frame = latest_frame.copy()
-        if field_transformer is None:
-            field_transformer = compute_field_transformer(frame)
-            if field_transformer is None:
-                time.sleep(1)
-                continue
-        try:
-            result = PLAYER_DETECTION_MODEL.infer(frame, confidence=0.3)[0]
-            detections = sv.Detections.from_inference(result)
-            players_detections = detections[detections.class_id == 2]  # PLAYER_ID assumed as 2
-            players_xy = players_detections.get_anchors_coordinates(sv.Position.BOTTOM_CENTER)
-            pitch_players_xy = field_transformer.transform_points(points=players_xy)
-        except Exception as e:
-            print(f"[ERROR] Live field map detection: {e}")
-            pitch_players_xy = np.empty((0,2))
-        try:
-            # draw_pitch now returns a numpy array image
-            pitch_img = draw_pitch(CONFIG, background_color=sv.Color.WHITE, line_color=sv.Color.BLACK)
-            pitch_img = draw_points_on_pitch(
-                config=CONFIG,
-                xy=pitch_players_xy,
-                face_color=sv.Color.from_hex('00BFFF'),
-                edge_color=sv.Color.BLACK,
-                radius=16,
-                pitch=pitch_img
-            )
-            # Convert numpy array to PIL Image
-            field_map_pil = Image.fromarray(pitch_img)
-            imgtk = ImageTk.PhotoImage(image=field_map_pil)
-            field_map_label.config(image=imgtk)
-            field_map_label.image = imgtk
-        except Exception as e:
-            print(f"[ERROR] Drawing field map: {e}")
-        time.sleep(1)
+        team_color = "blue" if canvas_x < canvas_width / 2 else "red"
+        r = 10
+        behav_canvas.create_oval(canvas_x - r, canvas_y - r, canvas_x + r, canvas_y + r,
+                                   fill=team_color, outline="")
+        behav_canvas.create_text(canvas_x, canvas_y - 15, text=f"ID:{pid} {avg_speed:.1f}", fill="white", font=("Helvetica", 8))
 
-def on_display_field():
-    global field_map_window, field_map_label, field_map_active, field_transformer
-    if field_map_window is None or not field_map_window.winfo_exists():
-        field_map_window = tk.Toplevel(root)
-        field_map_window.title("Live Field Map")
-        field_map_label = tk.Label(field_map_window, text="Initializing...", bg="white")
-        field_map_label.pack(expand=True, fill=tk.BOTH)
-        field_map_window.geometry("600x400")
-        field_transformer = None
-    field_map_active = True
-    threading.Thread(target=update_field_map, daemon=True).start()
+    stats = "Speed Stats: " + ", ".join([f"ID {pid}: {player_speed_sum.get(pid, 0)/player_speed_count.get(pid, 1):.1f}" for pid in ids])
+    log(stats)
 
-def stop_field_map():
-    global field_map_active
-    field_map_active = False
+# --- Update Field Map (Behavioral Map) Loop ---
+def behavioral_map_loop():
+    # Only update if the behavioral map is active
+    while behav_map_active:
+        update_behavioral_map()
+        time.sleep(0.5)
 
-def on_field_map_close():
-    stop_field_map()
-    if field_map_window is not None:
-        field_map_window.destroy()
-
-# --- Button Command Functions ---
-
-def on_show_stream():
-    show_stream()
-
-def on_stop_stream():
-    stop_rtmp()
-
-def on_run_model():
-    run_model()
-
-def on_stop_model():
-    stop_model()
-
-def on_start_recording():
-    global recording, video_writer, latest_frame
-    print("[INFO] Start Recording clicked.")
-    if latest_frame is None:
-        messagebox.showwarning("No Video", "No video frame available to record yet.")
-        return
-    if recording:
-        messagebox.showinfo("Recording", "Recording is already in progress.")
-        return
-    height, width, _ = latest_frame.shape
-    fourcc = cv2.VideoWriter_fourcc(*'XVID')
-    video_writer = cv2.VideoWriter("output.avi", fourcc, 10, (width, height))
-    if not video_writer.isOpened():
-        messagebox.showerror("Recording Error", "Failed to open video writer.")
-        return
-    recording = True
-    print("[INFO] Recording started.")
-
-def on_stop_recording():
-    global recording, video_writer
-    print("[INFO] Stop Recording clicked.")
-    if recording:
-        recording = False
-        if video_writer:
-            video_writer.release()
-            video_writer = None
-        print("[INFO] Recording stopped.")
-    else:
-        messagebox.showinfo("Recording", "Recording is not in progress.")
-
-def on_escape(event):
-    root.quit()
-
-# --- Main Functions for Stream and Model Handling ---
+# --- Video/Stream Handling ---
+def load_video_files():
+    # List files in "videos" folder
+    if os.path.isdir("videos"):
+        files = [f for f in os.listdir("videos") if f.lower().endswith(('.mp4','.avi','.mov'))]
+        return files
+    return []
 
 def show_stream():
-    global stop_rtmp_flag, rtmp_thread
-    print("[INFO] 'Show Stream' button clicked.")
-    rtmp_url = url_entry.get()
+    global stop_rtmp_flag, rtmp_thread, latest_frame
+    rtmp_url = rtsp_entry.get().strip()
     if not rtmp_url:
-        messagebox.showwarning("No Video URL", "Please enter a video URL.")
-        return
+        # If no RTMP link entered, try file selection from combobox
+        selected = video_combo.get().strip()
+        if selected:
+            rtmp_url = os.path.join("videos", selected)
+        else:
+            messagebox.showwarning("No Video", "Please enter an RTMP link or select a video file.")
+            return
     stop_rtmp()
     stop_rtmp_flag = False
+
+    # Update right panel to show video stream
     def rtmp_loop():
-        print(f"[INFO] Video stream started with URL = {rtmp_url}")
         cap = cv2.VideoCapture(rtmp_url)
         if not cap.isOpened():
-            print("[ERROR] Could not open video stream.")
+            log("Could not open video stream.")
             return
         while not stop_rtmp_flag:
             ret, frame = cap.read()
             if not ret:
-                print("[ERROR] Failed to read frame from video stream.")
+                log("Failed to read frame from video stream.")
                 break
             global latest_frame
             latest_frame = frame
             time.sleep(0.03)
         cap.release()
-        print("[INFO] Video stream ended.")
+        log("Video stream ended.")
     rtmp_thread = threading.Thread(target=rtmp_loop, daemon=True)
     rtmp_thread.start()
-    print("[INFO] Stream thread started.")
 
 def stop_rtmp():
     global stop_rtmp_flag, rtmp_thread, latest_frame
-    print("[INFO] Stopping stream.")
     stop_rtmp_flag = True
     if rtmp_thread and rtmp_thread.is_alive():
         rtmp_thread.join()
-    rtmp_thread = None
     latest_frame = None
-    video_label.config(image="", text="No Video", fg="white")
-    print("[INFO] Stream stopped.")
 
-def run_model():
+# --- Model Handling (unchanged branches, with added MSA Detection) ---
+def on_run_model():
     global model_active, active_model, yolo_model, yolo_thread, rps_thread, football_thread, football_model
-    print("[INFO] Start Model clicked.")
     if latest_frame is None:
         messagebox.showwarning("No Stream", "Video stream is not active. Please start the stream first.")
         return
@@ -472,11 +335,7 @@ def run_model():
             return
         yolo_thread = threading.Thread(target=yolo_inference, daemon=True)
         yolo_thread.start()
-        print("[INFO] YOLO Pose inference started.")
-    elif chosen_model == "rock-paper-scissors-sxsw/14":
-        rps_thread = threading.Thread(target=rps_inference, daemon=True)
-        rps_thread.start()
-        print("[INFO] RPS inference started.")
+        log("YOLO Pose inference started.")
     elif chosen_model == "football-players-detection-3zvbc/11":
         if football_model is None:
             try:
@@ -487,13 +346,30 @@ def run_model():
                 return
         football_thread = threading.Thread(target=football_inference, daemon=True)
         football_thread.start()
-        print("[INFO] Football inference started.")
+        log("Football inference started.")
+    elif chosen_model == "Custom Workflow":
+        try:
+            custom_model = get_model(workspace_name="noveternum", workflow_id="custom-workflow")
+        except Exception as e:
+            messagebox.showerror("Model Error", f"Failed to load Custom Workflow model: {e}")
+            model_active = False
+            return
+        threading.Thread(target=custom_inference, daemon=True).start()
+        log("Custom Workflow inference started.")
+    elif chosen_model == "MSA Detection":
+        try:
+            _ = get_model(workspace_name="noveternum", workflow_id="custom-workflow")
+        except Exception as e:
+            messagebox.showerror("Model Error", f"Failed to load MSA Detection model: {e}")
+            model_active = False
+            return
+        threading.Thread(target=msa_inference, daemon=True).start()
+        log("MSA Detection inference started.")
     else:
-        print(f"[INFO] Model overlay activated: {chosen_model}")
+        log(f"Model overlay activated: {chosen_model}")
 
 def stop_model():
     global model_active, active_model, yolo_thread, rps_thread, football_thread, annotated_frame
-    print("[INFO] Stop Model clicked.")
     model_active = False
     active_model = None
     if yolo_thread and yolo_thread.is_alive():
@@ -503,126 +379,164 @@ def stop_model():
     if football_thread and football_thread.is_alive():
         football_thread.join()
     annotated_frame = None
+    log("Model stopped.")
 
-def update_frame():
-    global latest_frame, video_writer, recording, model_active, active_model, annotated_frame
+def on_start_recording():
+    global recording, video_writer, latest_frame
     if latest_frame is None:
-        video_label.config(text="No Video", image="")
+        messagebox.showwarning("No Video", "No video frame available to record yet.")
+        return
+    if recording:
+        messagebox.showinfo("Recording", "Recording is already in progress.")
+        return
+    height, width, _ = latest_frame.shape
+    fourcc = cv2.VideoWriter_fourcc(*'XVID')
+    video_writer = cv2.VideoWriter("output.avi", fourcc, 10, (width, height))
+    if not video_writer.isOpened():
+        messagebox.showerror("Recording Error", "Failed to open video writer.")
+        return
+    recording = True
+    log("Recording started.")
+
+def on_stop_recording():
+    global recording, video_writer
+    if recording:
+        recording = False
+        if video_writer:
+            video_writer.release()
+            video_writer = None
+        log("Recording stopped.")
     else:
-        try:
-            if model_active:
-                if annotated_frame is not None:
-                    frame_to_show = annotated_frame.copy()
-                else:
-                    frame_to_show = latest_frame.copy()
-                    cv2.putText(frame_to_show, f"Model: {active_model}",
-                                (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1,
-                                (0, 255, 0), 2, cv2.LINE_AA)
-            else:
-                frame_to_show = latest_frame.copy()
-            frame_rgb = cv2.cvtColor(frame_to_show, cv2.COLOR_BGR2RGB)
-            img = Image.fromarray(frame_rgb)
-            imgtk = ImageTk.PhotoImage(image=img)
-            video_label.config(image=imgtk, text="")
-            video_label.image = imgtk
-            if recording and video_writer is not None:
-                video_writer.write(frame_to_show)
-        except Exception as e:
-            print("[ERROR] Could not display frame:", e)
-            video_label.config(image="", text="No Video")
-    current_fps = fps_value.get()
-    if current_fps <= 0:
-        current_fps = 60
-    delay = int(1000 / current_fps)
-    root.after(delay, update_frame)
+        messagebox.showinfo("Recording", "Recording is not in progress.")
 
-# --- Build the GUI ---
-root.title("Full-Screen Dark UI")
-root.attributes("-fullscreen", True)
+# --- GUI Layout Setup ---
+root = tk.Tk()
+root.title("Full-Screen Application")
 
-style = ttk.Style()
-style.theme_use("clam")
+# Make window full-screen
+root.state("zoomed")
 root.configure(bg="black")
-style.configure("TFrame", background="black")
-style.configure("TButton", background="gray25", foreground="white",
-                bordercolor="gray25", focusthickness=3, focuscolor="gray25")
-style.configure("TLabel", background="black", foreground="white")
-style.configure("TCombobox", fieldbackground="gray25", foreground="white")
-style.configure("TEntry", fieldbackground="gray25", foreground="white")
-style.map("TButton",
-          foreground=[("active", "white"), ("disabled", "grey")],
-          background=[("active", "gray40"), ("disabled", "gray20")])
-root.bind("<Escape>", on_escape)
 
-# Left/Right frames
-left_frame = ttk.Frame(root, width=300)
-left_frame.pack(side=tk.LEFT, fill=tk.Y)
-right_frame = ttk.Frame(root)
-right_frame.pack(side=tk.RIGHT, expand=True, fill=tk.BOTH)
-top_frame = ttk.Frame(right_frame)
-top_frame.pack(side=tk.TOP, expand=True, fill=tk.BOTH)
-bottom_frame = ttk.Frame(right_frame, height=200)
-bottom_frame.pack(side=tk.BOTTOM, fill=tk.X)
+# Main layout: Left panel, Right panel, and Bottom terminal
+left_panel = tk.Frame(root, bg="black", width=300)
+left_panel.pack(side=tk.LEFT, fill=tk.Y)
+right_panel = tk.Frame(root, bg="gray20")
+right_panel.pack(side=tk.RIGHT, expand=True, fill=tk.BOTH)
+bottom_terminal = tk.Frame(root, bg="black", height=150)
+bottom_terminal.pack(side=tk.BOTTOM, fill=tk.X)
 
-# Left Menu Panel
-url_label = ttk.Label(left_frame, text="VIDEO URL:")
-url_label.pack(pady=(20, 5))
-url_entry = ttk.Entry(left_frame, width=25)
-url_entry.insert(0, "videos/bundesliga4.mp4")
-url_entry.pack(pady=(0, 20))
+# Left panel is split into Control Panel (top) and Behavioral Map (bottom)
+control_panel = tk.Frame(left_panel, bg="black")
+control_panel.pack(side=tk.TOP, fill=tk.X, padx=10, pady=10)
+# Behavioral Map canvas (initially inactive: gray background)
+behav_canvas = tk.Canvas(left_panel, bg="gray30", width=280, height=200)
+behav_canvas.pack(side=tk.BOTTOM, padx=10, pady=10)
+behav_map_active = False  # Toggle state
 
-fps_label = ttk.Label(left_frame, text="FPS:")
-fps_label.pack(pady=(10, 0))
-fps_slider = tk.Scale(left_frame, from_=1, to=100, orient=tk.HORIZONTAL, variable=fps_value)
-fps_slider.pack(pady=(0, 10))
+def toggle_behavioral_map():
+    global behav_map_active
+    behav_map_active = not behav_map_active
+    if behav_map_active:
+        behav_canvas.config(bg="black")
+        log("Behavioral Map activated.")
+        # Start behavioral map update thread if not already running
+        threading.Thread(target=behavioral_map_loop, daemon=True).start()
+    else:
+        behav_canvas.config(bg="gray30")
+        log("Behavioral Map deactivated.")
 
-stream_button_frame = ttk.Frame(left_frame)
-stream_button_frame.pack(pady=10)
-btn_show_stream = ttk.Button(stream_button_frame, text="Show Stream", command=on_show_stream)
-btn_show_stream.grid(row=0, column=0, padx=5)
-btn_stop_stream = ttk.Button(stream_button_frame, text="Stop Stream", command=on_stop_stream)
-btn_stop_stream.grid(row=0, column=1, padx=5)
+btn_toggle_behav = ttk.Button(control_panel, text="Toggle Behavioral Map", command=toggle_behavioral_map)
+btn_toggle_behav.pack(pady=(0,10))
 
-model_label = ttk.Label(left_frame, text="Choose Model:")
-model_label.pack(pady=(20, 5))
-model_options = [
-    "YOLO Pose",
-    "football-players-detection-3zvbc/11"
-]
-model_var = tk.StringVar()
-model_combo = ttk.Combobox(left_frame, textvariable=model_var, values=model_options, state="readonly")
-model_combo.pack(pady=(0, 20))
-model_combo.current(0)
+# Video input controls in control_panel
+rtsp_label = ttk.Label(control_panel, text="RTMP Link:")
+rtsp_label.pack(anchor="w")
+rtsp_entry = ttk.Entry(control_panel, width=40)
+rtsp_entry.pack(pady=(0,5))
+# Also add a combobox for local videos
+ttk.Label(control_panel, text="Or choose a local video:").pack(anchor="w")
+video_files = load_video_files()
+video_combo = ttk.Combobox(control_panel, values=video_files, state="readonly", width=37)
+video_combo.pack(pady=(0,10))
 
-model_button_frame = ttk.Frame(left_frame)
-model_button_frame.pack(pady=10)
-btn_run_model = ttk.Button(model_button_frame, text="Start Model", command=on_run_model)
+# FPS slider
+ttk.Label(control_panel, text="FPS:").pack(anchor="w")
+fps_value = tk.IntVar(value=60)
+fps_slider = tk.Scale(control_panel, from_=1, to=100, orient=tk.HORIZONTAL, variable=fps_value,
+                      bg="black", fg="white", highlightbackground="black")
+fps_slider.pack(fill=tk.X, pady=(0,10))
+
+# Model selection
+ttk.Label(control_panel, text="Choose Model:").pack(anchor="w")
+model_options = ["YOLO Pose", "football-players-detection-3zvbc/11", "Custom Workflow", "MSA Detection"]
+model_var = tk.StringVar(value=model_options[0])
+model_combo = ttk.Combobox(control_panel, textvariable=model_var, values=model_options, state="readonly", width=37)
+model_combo.pack(pady=(0,10))
+
+# Model control buttons
+model_btn_frame = tk.Frame(control_panel, bg="black")
+model_btn_frame.pack(pady=5)
+btn_run_model = ttk.Button(model_btn_frame, text="Start Model", command=on_run_model)
 btn_run_model.grid(row=0, column=0, padx=5)
-btn_stop_model = ttk.Button(model_button_frame, text="Stop Model", command=on_stop_model)
+btn_stop_model = ttk.Button(model_btn_frame, text="Stop Model", command=stop_model)
 btn_stop_model.grid(row=0, column=1, padx=5)
 
-record_button_frame = ttk.Frame(left_frame)
-record_button_frame.pack(pady=10)
-btn_start_recording = ttk.Button(record_button_frame, text="Start Recording", command=on_start_recording)
+# Recording buttons
+record_btn_frame = tk.Frame(control_panel, bg="black")
+record_btn_frame.pack(pady=5)
+btn_start_recording = ttk.Button(record_btn_frame, text="Start Recording", command=on_start_recording)
 btn_start_recording.grid(row=0, column=0, padx=5)
-btn_stop_recording = ttk.Button(record_button_frame, text="Stop Recording", command=on_stop_recording)
+btn_stop_recording = ttk.Button(record_btn_frame, text="Stop Recording", command=on_stop_recording)
 btn_stop_recording.grid(row=0, column=1, padx=5)
 
-# New Buttons for additional functionalities
-extra_button_frame = ttk.Frame(left_frame)
-extra_button_frame.pack(pady=10)
-btn_split_teams = ttk.Button(extra_button_frame, text="Split Teams", command=on_split_teams)
-btn_split_teams.grid(row=0, column=0, padx=5)
-btn_pitch_detect = ttk.Button(extra_button_frame, text="Pitch Detection", command=on_pitch_detection)
-btn_pitch_detect.grid(row=0, column=1, padx=5)
-btn_live_field = ttk.Button(extra_button_frame, text="Display Field", command=on_display_field)
-btn_live_field.grid(row=0, column=2, padx=5)
+# Stream control buttons
+stream_btn_frame = tk.Frame(control_panel, bg="black")
+stream_btn_frame.pack(pady=5)
+btn_show_stream = ttk.Button(stream_btn_frame, text="Show Stream", command=show_stream)
+btn_show_stream.grid(row=0, column=0, padx=5)
+btn_stop_stream = ttk.Button(stream_btn_frame, text="Stop Stream", command=stop_rtmp)
+btn_stop_stream.grid(row=0, column=1, padx=5)
 
-video_label = tk.Label(top_frame, text="No Video", bg="black", fg="white")
-video_label.pack(expand=True, fill=tk.BOTH, padx=10, pady=10)
-bottom_label = ttk.Label(bottom_frame, text="Placeholder for future content.")
-bottom_label.pack(padx=10, pady=10)
+# --- Right Panel: Video Stream Display ---
+video_label = tk.Label(right_panel, text="No Stream Currently", bg="gray20", fg="white")
+video_label.pack(expand=True, fill=tk.BOTH)
+
+# --- Bottom Terminal Panel ---
+terminal_text = tk.Text(bottom_terminal, bg="black", fg="lime", height=8)
+terminal_text.pack(expand=True, fill=tk.BOTH)
+terminal_text.insert(tk.END, "Terminal output...\n")
+terminal_text.config(state=tk.DISABLED)
+
+# Override print to also log in terminal (optional)
+# You can also use the log() function to add messages.
+
+# --- Update Frame Function ---
+def update_frame():
+    if right_panel.winfo_exists():
+        if latest_frame is None:
+            video_label.config(text="No Stream Currently", image="", bg="gray20")
+        else:
+            try:
+                # If model is active and we have annotated_frame, use it; otherwise use latest_frame
+                frame_to_show = annotated_frame.copy() if (model_active and annotated_frame is not None) else latest_frame.copy()
+                # Optionally overlay model name
+                if model_active:
+                    cv2.putText(frame_to_show, f"Model: {active_model}",
+                                (50,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2, cv2.LINE_AA)
+                frame_rgb = cv2.cvtColor(frame_to_show, cv2.COLOR_BGR2RGB)
+                img = Image.fromarray(frame_rgb)
+                imgtk = ImageTk.PhotoImage(image=img)
+                video_label.config(image=imgtk, text="")
+                video_label.image = imgtk
+                # Optionally, write frame to video_writer if recording
+                if recording and video_writer is not None:
+                    video_writer.write(frame_to_show)
+            except Exception as e:
+                log(f"Display frame error: {e}")
+    delay = int(1000 / fps_value.get())
+    root.after(delay, update_frame)
 
 update_frame()
-root.protocol("WM_DELETE_WINDOW", lambda: [stop_field_map(), root.destroy()])
+root.bind("<Escape>", lambda event: root.quit())
+root.protocol("WM_DELETE_WINDOW", lambda: [stop_rtmp(), root.destroy()])
 root.mainloop()

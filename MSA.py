@@ -13,10 +13,10 @@ from more_itertools import chunked
 import umap
 from sklearn.cluster import KMeans
 import matplotlib.pyplot as plt
-from tkinter import messagebox
 from datetime import datetime
 # For Roboflow football model inference (using inference-gpu)
 from inference import get_model
+
 ROBOFLOW_API_KEY = "tvZVhjN9hMWkURbVo84w"
 PLAYER_DETECTION_MODEL_ID = "movesafep4/3"  # Use your model ID
 # Load the player detection model
@@ -110,7 +110,6 @@ triangle_annotator = sv.TriangleAnnotator(
 )
 
 # --- Inference Helper Functions ---
-
 def my_sink(result, video_frame):
     for box in result.get("boxes", []):
         x1, y1, x2, y2 = box
@@ -326,7 +325,6 @@ def update_field_map():
             print(f"[ERROR] Live field map detection: {e}")
             pitch_players_xy = np.empty((0,2))
         try:
-            # draw_pitch now returns a numpy array image
             pitch_img = draw_pitch(CONFIG, background_color=sv.Color.WHITE, line_color=sv.Color.BLACK)
             pitch_img = draw_points_on_pitch(
                 config=CONFIG,
@@ -336,7 +334,6 @@ def update_field_map():
                 radius=16,
                 pitch=pitch_img
             )
-            # Convert numpy array to PIL Image
             field_map_pil = Image.fromarray(pitch_img)
             imgtk = ImageTk.PhotoImage(image=field_map_pil)
             field_map_label.config(image=imgtk)
@@ -367,7 +364,6 @@ def on_field_map_close():
         field_map_window.destroy()
 
 # --- Button Command Functions ---
-
 def on_show_stream():
     show_stream()
 
@@ -389,19 +385,14 @@ def on_start_recording():
     if recording:
         messagebox.showinfo("Recording", "Recording is already in progress.")
         return
-    
     height, width, _ = latest_frame.shape
     fourcc = cv2.VideoWriter_fourcc(*'XVID')
-    
-    # Generate a unique filename using the current timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"output_{timestamp}.avi"
-    
     video_writer = cv2.VideoWriter(filename, fourcc, 10, (width, height))
     if not video_writer.isOpened():
         messagebox.showerror("Recording Error", "Failed to open video writer.")
         return
-    
     recording = True
     print(f"[INFO] Recording started. Saving to {filename}")
 
@@ -421,11 +412,10 @@ def on_escape(event):
     root.quit()
 
 # --- Main Functions for Stream and Model Handling ---
-
 def show_stream():
     global stop_rtmp_flag, rtmp_thread
     print("[INFO] 'Show Stream' button clicked.")
-    rtmp_url = url_entry.get()
+    rtmp_url = url_combo.get()
     if not rtmp_url:
         messagebox.showwarning("No Video URL", "Please enter a video URL.")
         return
@@ -544,6 +534,15 @@ def update_frame():
     delay = int(1000 / current_fps)
     root.after(delay, update_frame)
 
+# --- Helper function to get video files ---
+def get_video_files():
+    video_folder = "videos"
+    if not os.path.exists(video_folder):
+        return []
+    video_files = [f for f in os.listdir(video_folder) 
+                   if f.lower().endswith(('.mp4', '.avi', '.mov', '.mkv'))]
+    return video_files
+
 # --- Build the GUI ---
 root.title("Full-Screen Dark UI")
 root.attributes("-fullscreen", True)
@@ -562,23 +561,48 @@ style.map("TButton",
           background=[("active", "gray40"), ("disabled", "gray20")])
 root.bind("<Escape>", on_escape)
 
-# Left/Right frames
+# Create left control panel frame
 left_frame = ttk.Frame(root, width=300)
-left_frame.pack(side=tk.LEFT, fill=tk.Y)
-right_frame = ttk.Frame(root)
-right_frame.pack(side=tk.RIGHT, expand=True, fill=tk.BOTH)
-top_frame = ttk.Frame(right_frame)
-top_frame.pack(side=tk.TOP, expand=True, fill=tk.BOTH)
-bottom_frame = ttk.Frame(right_frame, height=200)
-bottom_frame.pack(side=tk.BOTTOM, fill=tk.X)
+left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=10)
 
-# Left Menu Panel
-url_label = ttk.Label(left_frame, text="VIDEO URL:")
-url_label.pack(pady=(20, 5))
-url_entry = ttk.Entry(left_frame, width=25)
-url_entry.insert(0, "videos/bundesliga4.mp4")
-url_entry.pack(pady=(0, 20))
+# --- Video Input Section (Single Editable Combobox) ---
+input_frame = ttk.Frame(left_frame, padding=10)
+input_frame.pack(fill=tk.X)
 
+# Label for the input
+url_label = ttk.Label(input_frame, text="VIDEO URL or File:")
+url_label.grid(row=0, column=0, sticky=tk.W, pady=(0,5))
+
+# Editable combobox for video input.
+url_combo = ttk.Combobox(input_frame, state="normal", width=40)
+url_combo.grid(row=1, column=0, padx=(0,5), pady=(0,10))
+
+def get_video_files():
+    video_folder = "videos"
+    if not os.path.exists(video_folder):
+        return []
+    # Filter for common video file extensions
+    video_files = [os.path.join("videos", f) for f in os.listdir(video_folder) 
+                   if f.lower().endswith(('.mp4', '.avi', '.mov', '.mkv'))]
+    return video_files
+
+def update_url_combo():
+    video_files = get_video_files()
+    # Set the combobox values to the list of local video files.
+    url_combo['values'] = video_files
+    # If there are local videos, set the default value.
+    if video_files:
+        url_combo.set(video_files[0])
+    else:
+        url_combo.set("")
+
+# Initially populate the combobox with local video files.
+update_url_combo()
+
+btn_show_stream = ttk.Button(input_frame, text="Show Stream", command=on_show_stream)
+btn_show_stream.grid(row=2, column=0, columnspan=2, pady=(10,0))
+
+# Other controls in left panel
 fps_label = ttk.Label(left_frame, text="FPS:")
 fps_label.pack(pady=(10, 0))
 fps_slider = tk.Scale(left_frame, from_=1, to=100, orient=tk.HORIZONTAL, variable=fps_value)
@@ -586,8 +610,8 @@ fps_slider.pack(pady=(0, 10))
 
 stream_button_frame = ttk.Frame(left_frame)
 stream_button_frame.pack(pady=10)
-btn_show_stream = ttk.Button(stream_button_frame, text="Show Stream", command=on_show_stream)
-btn_show_stream.grid(row=0, column=0, padx=5)
+btn_show_stream_ctrl = ttk.Button(stream_button_frame, text="Show Stream", command=on_show_stream)
+btn_show_stream_ctrl.grid(row=0, column=0, padx=5)
 btn_stop_stream = ttk.Button(stream_button_frame, text="Stop Stream", command=on_stop_stream)
 btn_stop_stream.grid(row=0, column=1, padx=5)
 
@@ -616,7 +640,6 @@ btn_start_recording.grid(row=0, column=0, padx=5)
 btn_stop_recording = ttk.Button(record_button_frame, text="Stop Recording", command=on_stop_recording)
 btn_stop_recording.grid(row=0, column=1, padx=5)
 
-# New Buttons for additional functionalities
 extra_button_frame = ttk.Frame(left_frame)
 extra_button_frame.pack(pady=10)
 btn_split_teams = ttk.Button(extra_button_frame, text="Split Teams", command=on_split_teams)
@@ -626,8 +649,19 @@ btn_pitch_detect.grid(row=0, column=1, padx=5)
 btn_live_field = ttk.Button(extra_button_frame, text="Display Field", command=on_display_field)
 btn_live_field.grid(row=0, column=2, padx=5)
 
+# Right frame for video display
+right_frame = ttk.Frame(root)
+right_frame.pack(side=tk.RIGHT, expand=True, fill=tk.BOTH)
+
+top_frame = ttk.Frame(right_frame)
+top_frame.pack(side=tk.TOP, expand=True, fill=tk.BOTH)
+
+bottom_frame = ttk.Frame(right_frame, height=200)
+bottom_frame.pack(side=tk.BOTTOM, fill=tk.X)
+
 video_label = tk.Label(top_frame, text="No Video", bg="black", fg="white")
 video_label.pack(expand=True, fill=tk.BOTH, padx=10, pady=10)
+
 bottom_label = ttk.Label(bottom_frame, text="Placeholder for future content.")
 bottom_label.pack(padx=10, pady=10)
 

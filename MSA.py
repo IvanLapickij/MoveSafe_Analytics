@@ -548,7 +548,7 @@ def update_frame():
             print("[ERROR] Could not display frame:", e)
             video_label.config(image="", text="No Video")
     # Schedule the next frame update (every 30 ms)
-    root.after(30, update_frame)
+    root.after(10, update_frame)
 
 
 # --- Helper function to get video files ---
@@ -629,8 +629,8 @@ btn_stop_stream.grid(row=0, column=1, padx=5)
 model_label = ttk.Label(left_frame, text="Choose Model:")
 model_label.pack(pady=(20, 5))
 model_options = [
-    "YOLO Pose",
-    "football-players-detection-3zvbc/11"
+    "football-players-detection-3zvbc/11",
+    "YOLO Pose"
 ]
 model_var = tk.StringVar()
 model_combo = ttk.Combobox(left_frame, textvariable=model_var, values=model_options, state="readonly")

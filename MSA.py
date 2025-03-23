@@ -13,11 +13,12 @@ from more_itertools import chunked
 import umap
 from sklearn.cluster import KMeans
 import matplotlib.pyplot as plt
-
+from tkinter import messagebox
+from datetime import datetime
 # For Roboflow football model inference (using inference-gpu)
 from inference import get_model
 ROBOFLOW_API_KEY = "tvZVhjN9hMWkURbVo84w"
-PLAYER_DETECTION_MODEL_ID = "football-players-detection-3zvbc/11"  # Use your model ID
+PLAYER_DETECTION_MODEL_ID = "movesafep4/3"  # Use your model ID
 # Load the player detection model
 PLAYER_DETECTION_MODEL = get_model(model_id=PLAYER_DETECTION_MODEL_ID, api_key=ROBOFLOW_API_KEY)
 
@@ -29,7 +30,7 @@ FIELD_DETECTION_MODEL = get_model(model_id=FIELD_DETECTION_MODEL_ID, api_key=ROB
 # Additional imports for pitch keypoint detection and projection
 from configs.soccer import SoccerPitchConfiguration
 from common.view import ViewTransformer
-from annotators.soccer import draw_pitch, draw_points_on_pitch, draw_pitch_voronoi_diagram
+from annotators.soccer import draw_pitch, draw_points_on_pitch
 from common.team import TeamClassifier
 
 # Import supervision for annotation
@@ -388,14 +389,21 @@ def on_start_recording():
     if recording:
         messagebox.showinfo("Recording", "Recording is already in progress.")
         return
+    
     height, width, _ = latest_frame.shape
     fourcc = cv2.VideoWriter_fourcc(*'XVID')
-    video_writer = cv2.VideoWriter("output.avi", fourcc, 10, (width, height))
+    
+    # Generate a unique filename using the current timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"output_{timestamp}.avi"
+    
+    video_writer = cv2.VideoWriter(filename, fourcc, 10, (width, height))
     if not video_writer.isOpened():
         messagebox.showerror("Recording Error", "Failed to open video writer.")
         return
+    
     recording = True
-    print("[INFO] Recording started.")
+    print(f"[INFO] Recording started. Saving to {filename}")
 
 def on_stop_recording():
     global recording, video_writer

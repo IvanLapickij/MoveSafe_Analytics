@@ -60,7 +60,7 @@ active_model = None    # Name of the selected model
 annotated_frame = None # Frame after model annotations
 
 # YOLO Pose globals
-yolo_model = None
+yolo_model = None 
 yolo_thread = None
 
 # RPS globals
@@ -502,12 +502,22 @@ def stop_model():
         football_thread.join()
     annotated_frame = None
 
+# Global variable to track time between frames
+last_time = time.time()
+
 def update_frame():
-    global latest_frame, video_writer, recording, model_active, active_model, annotated_frame
+    global latest_frame, video_writer, recording, model_active, active_model, annotated_frame, last_time
     if latest_frame is None:
         video_label.config(text="No Video", image="")
     else:
         try:
+            # Compute the time difference and calculate FPS
+            current_time = time.time()
+            delta = current_time - last_time
+            fps = 1.0 / delta if delta > 0 else 0
+            last_time = current_time
+
+            # Prepare the frame to show
             if model_active:
                 if annotated_frame is not None:
                     frame_to_show = annotated_frame.copy()
@@ -518,21 +528,28 @@ def update_frame():
                                 (0, 255, 0), 2, cv2.LINE_AA)
             else:
                 frame_to_show = latest_frame.copy()
+            
+            # Overlay FPS text on the top left corner
+            cv2.putText(frame_to_show, f"FPS: {fps:.2f}", 
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, 
+                        (255, 255, 255), 2, cv2.LINE_AA)
+            
+            # Convert frame to RGB for PIL and update video display
             frame_rgb = cv2.cvtColor(frame_to_show, cv2.COLOR_BGR2RGB)
             img = Image.fromarray(frame_rgb)
             imgtk = ImageTk.PhotoImage(image=img)
             video_label.config(image=imgtk, text="")
             video_label.image = imgtk
+            
+            # If recording, write the frame to the video file
             if recording and video_writer is not None:
                 video_writer.write(frame_to_show)
         except Exception as e:
             print("[ERROR] Could not display frame:", e)
             video_label.config(image="", text="No Video")
-    current_fps = fps_value.get()
-    if current_fps <= 0:
-        current_fps = 60
-    delay = int(1000 / current_fps)
-    root.after(delay, update_frame)
+    # Schedule the next frame update (every 30 ms)
+    root.after(30, update_frame)
+
 
 # --- Helper function to get video files ---
 def get_video_files():
@@ -601,12 +618,6 @@ update_url_combo()
 
 btn_show_stream = ttk.Button(input_frame, text="Show Stream", command=on_show_stream)
 btn_show_stream.grid(row=2, column=0, columnspan=2, pady=(10,0))
-
-# Other controls in left panel
-fps_label = ttk.Label(left_frame, text="FPS:")
-fps_label.pack(pady=(10, 0))
-fps_slider = tk.Scale(left_frame, from_=1, to=100, orient=tk.HORIZONTAL, variable=fps_value)
-fps_slider.pack(pady=(0, 10))
 
 stream_button_frame = ttk.Frame(left_frame)
 stream_button_frame.pack(pady=10)

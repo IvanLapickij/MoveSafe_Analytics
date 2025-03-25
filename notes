@@ -23,3 +23,6 @@ ffmpeg -f dshow -rtbufsize 256M -i video="Integrated Camera" -vf fps=10 -preset 
 
 #3. run python appclication#
 rtmp://192.168.247.179:1935/stream
+
+
+pip install PyQt5

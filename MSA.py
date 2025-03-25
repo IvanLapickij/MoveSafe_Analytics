@@ -350,7 +350,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.distance_fig.clf()
         ax = self.distance_fig.add_subplot(111)
         if current_distance is not None:
-            ax.bar(['Distance'], [current_distance], color='blue')
+            # Change color: red if below 50, otherwise blue.
+            bar_color = 'red' if current_distance < 50 else 'blue'
+            ax.bar(['Distance'], [current_distance], color=bar_color)
             ax.set_ylim(0, max(200, current_distance + 20))
             ax.set_ylabel("Distance (pixels)")
             ax.set_title("Distance between Teams")
@@ -358,15 +360,17 @@ class MainWindow(QtWidgets.QMainWindow):
             ax.text(0.5, 0.5, "Insufficient data", ha="center", va="center", fontsize=12)
         self.distance_canvas.draw()
 
-        # Update collision graph
+        # Update collision graph with a line plot instead of scatter
         self.collision_fig.clf()
         ax2 = self.collision_fig.add_subplot(111)
         if collision_durations:
             x_vals = list(range(1, len(collision_durations) + 1))
-            ax2.scatter(x_vals, collision_durations, color='red', label="Finalized Collisions")
+            ax2.plot(x_vals, collision_durations, color='red', marker='o', linestyle='-',
+                    label="Finalized Collisions")
         if collision_state:
-            ax2.scatter([len(collision_durations) + 1], [current_collision_duration],
-                        color='orange', label="Ongoing Collision")
+            # Plot ongoing collision as a separate point
+            ax2.plot([len(collision_durations) + 1], [current_collision_duration],
+                    color='orange', marker='o', linestyle='None', label="Ongoing Collision")
         ax2.set_xlabel("Collision Event")
         ax2.set_ylabel("Duration (s)")
         ax2.set_title("Collision Events (Duration)")
@@ -374,6 +378,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if handles:
             ax2.legend()
         self.collision_canvas.draw()
+
 
     def reset_graph(self):
         global collision_state, collision_start_time, current_collision_duration, collision_durations

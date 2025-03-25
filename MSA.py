@@ -24,7 +24,7 @@ PLAYER_DETECTION_MODEL = get_model(model_id=PLAYER_DETECTION_MODEL_ID, api_key=R
 
 # Initialize field detection model
 ROBOFLOW_API_KEY_FIELD = ROBOFLOW_API_KEY
-FIELD_DETECTION_MODEL_ID = "football-field-detection-f07vi/14"
+FIELD_DETECTION_MODEL_ID = "msa_keypoint_detection/1"
 FIELD_DETECTION_MODEL = get_model(model_id=FIELD_DETECTION_MODEL_ID, api_key=ROBOFLOW_API_KEY_FIELD)
 
 # Additional imports for pitch keypoint detection and projection
@@ -471,11 +471,7 @@ def run_model():
         yolo_thread = threading.Thread(target=yolo_inference, daemon=True)
         yolo_thread.start()
         print("[INFO] YOLO Pose inference started.")
-    elif chosen_model == "rock-paper-scissors-sxsw/14":
-        rps_thread = threading.Thread(target=rps_inference, daemon=True)
-        rps_thread.start()
-        print("[INFO] RPS inference started.")
-    elif chosen_model == "football-players-detection-3zvbc/11":
+    elif chosen_model == "Players detection":
         if football_model is None:
             try:
                 football_model = get_model(model_id=PLAYER_DETECTION_MODEL_ID, api_key=ROBOFLOW_API_KEY)
@@ -629,7 +625,7 @@ btn_stop_stream.grid(row=0, column=1, padx=5)
 model_label = ttk.Label(left_frame, text="Choose Model:")
 model_label.pack(pady=(20, 5))
 model_options = [
-    "football-players-detection-3zvbc/11",
+    "Players detection",
     "YOLO Pose"
 ]
 model_var = tk.StringVar()

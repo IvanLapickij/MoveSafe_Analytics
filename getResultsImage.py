@@ -1,11 +1,11 @@
 from inference import get_model
 ROBOFLOW_API_KEY="tvZVhjN9hMWkURbVo84w"
-PLAYER_DETECTION_MODEL_ID = "football-players-detection-3zvbc/11"
+PLAYER_DETECTION_MODEL_ID = "movesafep4/3"
 PLAYER_DETECTION_MODEL = get_model(model_id=PLAYER_DETECTION_MODEL_ID, api_key=ROBOFLOW_API_KEY)
 
 import supervision as sv
 
-SOURCE_VIDEO_PATH = "videos/bundesliga1.mp4"
+SOURCE_VIDEO_PATH = "videos\Video1_middleField_collision.mp4"
 
 box_annotator = sv.BoxAnnotator(
     color=sv.ColorPalette.from_hex(['#FF8C00', '#00BFFF', '#FF1493', '#FFD700']),

@@ -27,12 +27,6 @@ ROBOFLOW_API_KEY_FIELD = ROBOFLOW_API_KEY
 FIELD_DETECTION_MODEL_ID = "msa_keypoint_detection/1"
 FIELD_DETECTION_MODEL = get_model(model_id=FIELD_DETECTION_MODEL_ID, api_key=ROBOFLOW_API_KEY_FIELD)
 
-# Additional imports for pitch keypoint detection and projection
-from configs.soccer import SoccerPitchConfiguration
-from common.view import ViewTransformer
-from annotators.soccer import draw_pitch, draw_points_on_pitch
-from common.team import TeamClassifier
-
 # Import supervision for annotation
 try:
     import supervision as sv
@@ -80,9 +74,6 @@ EMBEDDINGS_MODEL = SiglipVisionModel.from_pretrained('google/siglip-base-patch16
 EMBEDDINGS_PROCESSOR = AutoProcessor.from_pretrained('google/siglip-base-patch16-224')
 REDUCER = umap.UMAP(n_components=3)
 CLUSTERING_MODEL = KMeans(n_clusters=2)
-
-# Team classifier (for later use in team projection)
-team_classifier = TeamClassifier(device="cuda")
 
 # FPS control (default 60 FPS)
 root = tk.Tk()
@@ -179,189 +170,6 @@ def football_inference():
                 except Exception as e:
                     print(f"[ERROR] Football inference error: {e}")
         time.sleep(0.03)
-
-# --- New Function: Split Teams via Clustering ---
-def split_teams():
-    global football_model
-    if latest_frame is None:
-        messagebox.showwarning("No Video", "Video stream is not active.")
-        return
-    if football_model is None:
-        try:
-            football_model = get_model(model_id=PLAYER_DETECTION_MODEL_ID, api_key=ROBOFLOW_API_KEY)
-        except Exception as e:
-            messagebox.showerror("Model Error", f"Failed to load football model: {e}")
-            return
-
-    messagebox.showinfo("Info", "Capturing 5 seconds of footage for team split...")
-    crops = []
-    start_time = time.time()
-    captured_frames = []
-    while time.time() - start_time < 5:
-        if latest_frame is not None:
-            captured_frames.append(latest_frame.copy())
-            time.sleep(1)
-    for frame in captured_frames:
-        try:
-            result = football_model.infer(frame, confidence=0.3)[0]
-            detections = sv.Detections.from_inference(result)
-            players_detections = detections[detections.class_id != BALL_ID]
-            players_detections = players_detections.with_nms(threshold=0.5, class_agnostic=True)
-            for xyxy in players_detections.xyxy:
-                crop = sv.crop_image(frame, xyxy)
-                crops.append(crop)
-        except Exception as e:
-            print(f"[ERROR] Player detection error: {e}")
-    if not crops:
-        messagebox.showwarning("No Players", "No players detected in the captured footage.")
-        return
-
-    pil_crops = [sv.cv2_to_pillow(crop) for crop in crops]
-    embeddings_list = []
-    for batch in chunked(pil_crops, BATCH_SIZE):
-        try:
-            inputs = EMBEDDINGS_PROCESSOR(images=batch, return_tensors="pt").to(EMBEDDINGS_MODEL.device)
-            with torch.no_grad():
-                outputs = EMBEDDINGS_MODEL(**inputs)
-            embeddings = torch.mean(outputs.last_hidden_state, dim=1).cpu().numpy()
-            embeddings_list.append(embeddings)
-        except Exception as e:
-            print(f"[ERROR] Embedding extraction error: {e}")
-    data = np.concatenate(embeddings_list)
-    projections = REDUCER.fit_transform(data)
-    clusters = CLUSTERING_MODEL.fit_predict(projections)
-    grid_img = sv.plot_images_grid(pil_crops[:100], grid_size=(10, 10))
-    save_path = os.path.join(os.getcwd(), "teams_split.png")
-    grid_img.savefig(save_path)
-    messagebox.showinfo("Teams Split", f"Team split complete. Grid image saved at:\n{save_path}")
-
-def on_split_teams():
-    threading.Thread(target=split_teams, daemon=True).start()
-
-# --- New Function: Pitch Keypoint Detection and Projection ---
-def pitch_keypoint_detection():
-    global latest_frame, FIELD_DETECTION_MODEL
-    if latest_frame is None:
-        messagebox.showwarning("No Video", "Video stream is not active.")
-        return
-    frame = latest_frame.copy()
-    try:
-        result = FIELD_DETECTION_MODEL.infer(frame, confidence=0.3)[0]
-    except Exception as e:
-        messagebox.showerror("Field Model Error", f"Error during field detection: {e}")
-        return
-    key_points = sv.KeyPoints.from_inference(result)
-    confidence_filter = key_points.confidence[0] > 0.5
-    if not np.any(confidence_filter):
-        messagebox.showwarning("Low Confidence", "No high confidence keypoints detected.")
-        return
-    frame_reference_points = key_points.xy[0][confidence_filter]
-    frame_reference_key_points = sv.KeyPoints(xy=frame_reference_points[np.newaxis, ...])
-    vertex_annotator_pitch = sv.VertexAnnotator(color=sv.Color.from_hex('#FF1493'), radius=8)
-    annotated_frame = frame.copy()
-    annotated_frame = vertex_annotator_pitch.annotate(scene=annotated_frame, key_points=frame_reference_key_points)
-    save_path = os.path.join(os.getcwd(), "pitch_keypoints.png")
-    cv2.imwrite(save_path, annotated_frame)
-    messagebox.showinfo("Pitch Keypoints", f"Pitch keypoints saved at:\n{save_path}")
-    
-    CONFIG = SoccerPitchConfiguration()
-    pitch_vertices = np.array(CONFIG.vertices)
-    pitch_reference_points = pitch_vertices[confidence_filter]
-    transformer = ViewTransformer(source=frame_reference_points, target=pitch_reference_points)
-    pitch_all_points = pitch_vertices
-    frame_all_points = transformer.transform_points(points=pitch_all_points)
-    frame_all_key_points = sv.KeyPoints(xy=frame_all_points[np.newaxis, ...])
-    edge_annotator_pitch = sv.EdgeAnnotator(color=sv.Color.from_hex('#00BFFF'), thickness=2, edges=CONFIG.edges)
-    annotated_frame = frame.copy()
-    annotated_frame = edge_annotator_pitch.annotate(scene=annotated_frame, key_points=frame_all_key_points)
-    save_path2 = os.path.join(os.getcwd(), "projected_pitch_lines.png")
-    cv2.imwrite(save_path2, annotated_frame)
-    messagebox.showinfo("Projected Pitch Lines", f"Projected pitch lines saved at:\n{save_path2}")
-
-def on_pitch_detection():
-    threading.Thread(target=pitch_keypoint_detection, daemon=True).start()
-
-# --- New Globals and Functions for Live Field Map ---
-field_map_window = None
-field_map_label = None
-field_map_active = False
-field_transformer = None
-CONFIG = SoccerPitchConfiguration()
-
-def compute_field_transformer(frame):
-    try:
-        result = FIELD_DETECTION_MODEL.infer(frame, confidence=0.3)[0]
-        key_points = sv.KeyPoints.from_inference(result)
-        conf_filter = key_points.confidence[0] > 0.5
-        if not np.any(conf_filter):
-            return None
-        frame_ref_points = key_points.xy[0][conf_filter]
-        pitch_ref_points = np.array(CONFIG.vertices)[conf_filter]
-        transformer = ViewTransformer(source=frame_ref_points, target=pitch_ref_points)
-        return transformer
-    except Exception as e:
-        print(f"[ERROR] Computing field transformer: {e}")
-        return None
-
-def update_field_map():
-    global field_map_window, field_map_label, field_map_active, field_transformer
-    while field_map_active:
-        if latest_frame is None:
-            time.sleep(0.1)
-            continue
-        frame = latest_frame.copy()
-        if field_transformer is None:
-            field_transformer = compute_field_transformer(frame)
-            if field_transformer is None:
-                time.sleep(1)
-                continue
-        try:
-            result = PLAYER_DETECTION_MODEL.infer(frame, confidence=0.3)[0]
-            detections = sv.Detections.from_inference(result)
-            players_detections = detections[detections.class_id == 2]  # PLAYER_ID assumed as 2
-            players_xy = players_detections.get_anchors_coordinates(sv.Position.BOTTOM_CENTER)
-            pitch_players_xy = field_transformer.transform_points(points=players_xy)
-        except Exception as e:
-            print(f"[ERROR] Live field map detection: {e}")
-            pitch_players_xy = np.empty((0,2))
-        try:
-            pitch_img = draw_pitch(CONFIG, background_color=sv.Color.WHITE, line_color=sv.Color.BLACK)
-            pitch_img = draw_points_on_pitch(
-                config=CONFIG,
-                xy=pitch_players_xy,
-                face_color=sv.Color.from_hex('00BFFF'),
-                edge_color=sv.Color.BLACK,
-                radius=16,
-                pitch=pitch_img
-            )
-            field_map_pil = Image.fromarray(pitch_img)
-            imgtk = ImageTk.PhotoImage(image=field_map_pil)
-            field_map_label.config(image=imgtk)
-            field_map_label.image = imgtk
-        except Exception as e:
-            print(f"[ERROR] Drawing field map: {e}")
-        time.sleep(1)
-
-def on_display_field():
-    global field_map_window, field_map_label, field_map_active, field_transformer
-    if field_map_window is None or not field_map_window.winfo_exists():
-        field_map_window = tk.Toplevel(root)
-        field_map_window.title("Live Field Map")
-        field_map_label = tk.Label(field_map_window, text="Initializing...", bg="white")
-        field_map_label.pack(expand=True, fill=tk.BOTH)
-        field_map_window.geometry("600x400")
-        field_transformer = None
-    field_map_active = True
-    threading.Thread(target=update_field_map, daemon=True).start()
-
-def stop_field_map():
-    global field_map_active
-    field_map_active = False
-
-def on_field_map_close():
-    stop_field_map()
-    if field_map_window is not None:
-        field_map_window.destroy()
 
 # --- Button Command Functions ---
 def on_show_stream():
@@ -612,9 +420,6 @@ def update_url_combo():
 # Initially populate the combobox with local video files.
 update_url_combo()
 
-btn_show_stream = ttk.Button(input_frame, text="Show Stream", command=on_show_stream)
-btn_show_stream.grid(row=2, column=0, columnspan=2, pady=(10,0))
-
 stream_button_frame = ttk.Frame(left_frame)
 stream_button_frame.pack(pady=10)
 btn_show_stream_ctrl = ttk.Button(stream_button_frame, text="Show Stream", command=on_show_stream)
@@ -648,13 +453,8 @@ btn_stop_recording = ttk.Button(record_button_frame, text="Stop Recording", comm
 btn_stop_recording.grid(row=0, column=1, padx=5)
 
 extra_button_frame = ttk.Frame(left_frame)
-extra_button_frame.pack(pady=10)
-btn_split_teams = ttk.Button(extra_button_frame, text="Split Teams", command=on_split_teams)
-btn_split_teams.grid(row=0, column=0, padx=5)
-btn_pitch_detect = ttk.Button(extra_button_frame, text="Pitch Detection", command=on_pitch_detection)
-btn_pitch_detect.grid(row=0, column=1, padx=5)
-btn_live_field = ttk.Button(extra_button_frame, text="Display Field", command=on_display_field)
-btn_live_field.grid(row=0, column=2, padx=5)
+# btn_live_field = ttk.Button(extra_button_frame, text="Display Map", command=on_stop_recording)
+# btn_live_field.grid(row=0, column=2, padx=5)
 
 # Right frame for video display
 right_frame = ttk.Frame(root)
@@ -666,12 +466,12 @@ top_frame.pack(side=tk.TOP, expand=True, fill=tk.BOTH)
 bottom_frame = ttk.Frame(right_frame, height=200)
 bottom_frame.pack(side=tk.BOTTOM, fill=tk.X)
 
-video_label = tk.Label(top_frame, text="No Video", bg="black", fg="white")
+video_label = tk.Label(top_frame, text="No Stream", bg="black", fg="white")
 video_label.pack(expand=True, fill=tk.BOTH, padx=10, pady=10)
 
 bottom_label = ttk.Label(bottom_frame, text="Placeholder for future content.")
 bottom_label.pack(padx=10, pady=10)
 
 update_frame()
-root.protocol("WM_DELETE_WINDOW", lambda: [stop_field_map(), root.destroy()])
+root.protocol("WM_DELETE_WINDOW", lambda: [root.destroy()])
 root.mainloop()

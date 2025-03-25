@@ -385,28 +385,65 @@ class MainWindow(QtWidgets.QMainWindow):
         self.update_graphs()
 
 # ------------------ Main ------------------
+def show_main_window(splash):
+    global main_window  # Ensure the main window reference is kept.
+    main_window = MainWindow()
+    main_window.show()
+    splash.finish(main_window)
+
 def main():
     app = QtWidgets.QApplication(sys.argv)
-    # Optionally set Fusion style and a dark palette.
     app.setStyle("Fusion")
+    
+    # Set up a dark palette.
     dark_palette = QtGui.QPalette()
-    dark_palette.setColor(QtGui.QPalette.Window, QtGui.QColor(30,30,30))
+    dark_palette.setColor(QtGui.QPalette.Window, QtGui.QColor(30, 30, 30))
     dark_palette.setColor(QtGui.QPalette.WindowText, QtCore.Qt.white)
-    dark_palette.setColor(QtGui.QPalette.Base, QtGui.QColor(45,45,45))
-    dark_palette.setColor(QtGui.QPalette.AlternateBase, QtGui.QColor(66,66,66))
+    dark_palette.setColor(QtGui.QPalette.Base, QtGui.QColor(45, 45, 45))
+    dark_palette.setColor(QtGui.QPalette.AlternateBase, QtGui.QColor(66, 66, 66))
     dark_palette.setColor(QtGui.QPalette.ToolTipBase, QtCore.Qt.white)
     dark_palette.setColor(QtGui.QPalette.ToolTipText, QtCore.Qt.white)
     dark_palette.setColor(QtGui.QPalette.Text, QtCore.Qt.white)
-    dark_palette.setColor(QtGui.QPalette.Button, QtGui.QColor(45,45,45))
+    dark_palette.setColor(QtGui.QPalette.Button, QtGui.QColor(45, 45, 45))
     dark_palette.setColor(QtGui.QPalette.ButtonText, QtCore.Qt.white)
     dark_palette.setColor(QtGui.QPalette.BrightText, QtCore.Qt.red)
-    dark_palette.setColor(QtGui.QPalette.Link, QtGui.QColor(42,130,218))
-    dark_palette.setColor(QtGui.QPalette.Highlight, QtGui.QColor(42,130,218))
+    dark_palette.setColor(QtGui.QPalette.Link, QtGui.QColor(42, 130, 218))
+    dark_palette.setColor(QtGui.QPalette.Highlight, QtGui.QColor(42, 130, 218))
     dark_palette.setColor(QtGui.QPalette.HighlightedText, QtCore.Qt.black)
     app.setPalette(dark_palette)
-
-    window = MainWindow()
-    window.show()
+    
+    # Attempt to load the splash image.
+    splash_image_path = "images/tus_logo.jpg"
+    if os.path.exists(splash_image_path):
+        splash_pix = QtGui.QPixmap(splash_image_path)
+    else:
+        print(f"[WARNING] Splash image '{splash_image_path}' not found. Using fallback splash.")
+        splash_pix = QtGui.QPixmap(800, 600)
+        splash_pix.fill(QtGui.QColor("darkGray"))
+        painter = QtGui.QPainter(splash_pix)
+        painter.setPen(QtCore.Qt.white)
+        font = QtGui.QFont("Arial", 24)
+        painter.setFont(font)
+        painter.drawText(splash_pix.rect(), QtCore.Qt.AlignCenter, "MSA - Move Safe Analytic")
+        painter.end()
+    
+    if splash_pix.isNull():
+        print("[ERROR] Failed to load splash image and fallback pixmap is null.")
+        sys.exit(1)
+    
+    # Scale the splash image.
+    scaled_pix = splash_pix.scaled(800, 600, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+    splash = QtWidgets.QSplashScreen(scaled_pix)
+    splash.setMask(scaled_pix.mask())
+    splash.showMessage("MSA - Move Safe Analytic", 
+                       QtCore.Qt.AlignBottom | QtCore.Qt.AlignCenter, 
+                       QtCore.Qt.white)
+    splash.show()
+    app.processEvents()
+    
+    # Delay for 3 seconds, then show the main window.
+    QtCore.QTimer.singleShot(3000, lambda: show_main_window(splash))
+    
     sys.exit(app.exec_())
 
 if __name__ == '__main__':

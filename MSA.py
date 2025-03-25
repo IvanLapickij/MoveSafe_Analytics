@@ -13,6 +13,7 @@ from more_itertools import chunked
 import umap
 from sklearn.cluster import KMeans
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from datetime import datetime
 # For Roboflow football model inference (using inference-gpu)
 from inference import get_model
@@ -38,6 +39,7 @@ box_annotator = sv.BoxAnnotator(
     color=sv.ColorPalette.from_hex(['#FF8C00', '#00BFFF', '#FF1493', '#FFD700']),
     thickness=2
 )
+# Note: we redefine label_annotator later for football model; keep one for common usage if needed.
 label_annotator = sv.LabelAnnotator(
     color=sv.ColorPalette.from_hex(['#FF8C00', '#00BFFF', '#FF1493', '#FFD700']),
     text_color=sv.Color.from_hex('#000000')
@@ -88,7 +90,8 @@ ellipse_annotator = sv.EllipseAnnotator(
     color=sv.ColorPalette.from_hex(['#00BFFF', '#FF1493', '#FFD700']),
     thickness=2
 )
-label_annotator = sv.LabelAnnotator(
+# Re-define label annotator for football model (with text below center)
+football_label_annotator = sv.LabelAnnotator(
     color=sv.ColorPalette.from_hex(['#00BFFF', '#FF1493', '#FFD700']),
     text_color=sv.Color.from_hex('#000000'),
     text_position=sv.Position.BOTTOM_CENTER
@@ -99,6 +102,9 @@ triangle_annotator = sv.TriangleAnnotator(
     height=21,
     outline_thickness=1
 )
+
+# Global to store current distance between players (in pixels)
+current_distance = None
 
 # --- Inference Helper Functions ---
 def my_sink(result, video_frame):
@@ -141,7 +147,7 @@ def yolo_inference():
         time.sleep(0.03)
 
 def football_inference():
-    global latest_frame, annotated_frame, model_active, football_model, tracker
+    global latest_frame, annotated_frame, model_active, football_model, tracker, current_distance
     frame_counter = 0
     process_every = 1
     scale_factor = 0.5
@@ -158,16 +164,29 @@ def football_inference():
                     # Scale back the coordinates to the original frame size
                     detections.xyxy = detections.xyxy / scale_factor
                     
-                    # Loop through each detection and print if class is Player Red or Player Blue
+                    # Gather positions for red and blue players.
+                    red_positions = []
+                    blue_positions = []
                     for class_name, bbox in zip(detections['class_name'], detections.xyxy):
-                        if class_name in ["Player Red", "Player Blue"]:
+                        if class_name == "Player Red":
                             x1, y1, x2, y2 = bbox
-                            # Calculate the center coordinates of the bounding box
-                            x_center = (x1 + x2) / 2.0
-                            y_center = (y1 + y2) / 2.0
-                            print(f"Detected {class_name} at x: {x_center:.2f}, y: {y_center:.2f}")
+                            # Compute center
+                            red_positions.append(((x1+x2)/2.0, (y1+y2)/2.0))
+                            print(f"Detected {class_name} at x: {(x1+x2)/2.0:.2f}, y: {(y1+y2)/2.0:.2f}")
+                        elif class_name == "Player Blue":
+                            x1, y1, x2, y2 = bbox
+                            blue_positions.append(((x1+x2)/2.0, (y1+y2)/2.0))
+                            print(f"Detected {class_name} at x: {(x1+x2)/2.0:.2f}, y: {(y1+y2)/2.0:.2f}")
                     
-                    # Continue with your existing processing:
+                    # Compute average positions for each team and calculate distance if both exist.
+                    if red_positions and blue_positions:
+                        avg_red = np.mean(red_positions, axis=0)
+                        avg_blue = np.mean(blue_positions, axis=0)
+                        current_distance = np.linalg.norm(np.array(avg_red) - np.array(avg_blue))
+                    else:
+                        current_distance = None
+                    
+                    # Continue with your existing detection processing.
                     ball_detections = detections[detections.class_id == BALL_ID]
                     ball_detections.xyxy = sv.pad_boxes(xyxy=ball_detections.xyxy, px=10)
                     all_detections = detections[detections.class_id != BALL_ID]
@@ -176,13 +195,31 @@ def football_inference():
                     tracked_detections = tracker.update_with_detections(detections=all_detections)
                     labels = [f"#{tracker_id}" for tracker_id in tracked_detections.tracker_id]
                     annotated = ellipse_annotator.annotate(scene=frame.copy(), detections=tracked_detections)
-                    annotated = label_annotator.annotate(scene=annotated, detections=tracked_detections, labels=labels)
+                    annotated = football_label_annotator.annotate(scene=annotated, detections=tracked_detections, labels=labels)
                     annotated = triangle_annotator.annotate(scene=annotated, detections=ball_detections)
                     annotated_frame = annotated
                 except Exception as e:
                     print(f"[ERROR] Football inference error: {e}")
         time.sleep(0.03)
 
+# --- Graph Update Function ---
+# This function updates a matplotlib bar chart in the bottom frame with the current distance value.
+def update_graph():
+    global current_distance, graph_canvas, graph_figure
+    # Clear the figure
+    graph_figure.clf()
+    ax = graph_figure.add_subplot(111)
+    if current_distance is not None:
+        # Plot a single bar indicating the distance (in pixels)
+        ax.bar(['Distance'], [current_distance], color='blue')
+        ax.set_ylim(0, max(200, current_distance + 20))
+        ax.set_ylabel("Distance (pixels)")
+        ax.set_title("Distance between Teams")
+    else:
+        ax.text(0.5, 0.5, "Insufficient data", ha="center", va="center", fontsize=12)
+    graph_canvas.draw()
+    # Schedule next graph update after 100ms
+    root.after(100, update_graph)
 
 # --- Button Command Functions ---
 def on_show_stream():
@@ -364,9 +401,8 @@ def update_frame():
         except Exception as e:
             print("[ERROR] Could not display frame:", e)
             video_label.config(image="", text="No Video")
-    # Schedule the next frame update (every 30 ms)
+    # Schedule the next frame update (every 10ms)
     root.after(10, update_frame)
-
 
 # --- Helper function to get video files ---
 def get_video_files():
@@ -465,25 +501,31 @@ btn_start_recording.grid(row=0, column=0, padx=5)
 btn_stop_recording = ttk.Button(record_button_frame, text="Stop Recording", command=on_stop_recording)
 btn_stop_recording.grid(row=0, column=1, padx=5)
 
-extra_button_frame = ttk.Frame(left_frame)
-# btn_live_field = ttk.Button(extra_button_frame, text="Display Map", command=on_stop_recording)
-# btn_live_field.grid(row=0, column=2, padx=5)
-
-# Right frame for video display
+# Right frame for video display and graph
 right_frame = ttk.Frame(root)
 right_frame.pack(side=tk.RIGHT, expand=True, fill=tk.BOTH)
 
+# Top frame for video display
 top_frame = ttk.Frame(right_frame)
 top_frame.pack(side=tk.TOP, expand=True, fill=tk.BOTH)
-
-bottom_frame = ttk.Frame(right_frame, height=200)
-bottom_frame.pack(side=tk.BOTTOM, fill=tk.X)
 
 video_label = tk.Label(top_frame, text="No Stream", bg="black", fg="white")
 video_label.pack(expand=True, fill=tk.BOTH, padx=10, pady=10)
 
-bottom_label = ttk.Label(bottom_frame, text="Placeholder for future content.")
+# Bottom frame for graph display
+bottom_frame = ttk.Frame(right_frame, height=200)
+bottom_frame.pack(side=tk.BOTTOM, fill=tk.X)
+
+# Create a matplotlib figure and embed it in the bottom frame
+graph_figure = plt.Figure(figsize=(5,2), dpi=100)
+graph_canvas = FigureCanvasTkAgg(graph_figure, master=bottom_frame)
+graph_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+bottom_label = ttk.Label(bottom_frame, text="Distance Graph", background="black", foreground="white")
 bottom_label.pack(padx=10, pady=10)
+
+# Start updating the graph
+update_graph()
 
 update_frame()
 root.protocol("WM_DELETE_WINDOW", lambda: [root.destroy()])

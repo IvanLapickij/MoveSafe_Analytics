@@ -155,7 +155,19 @@ def football_inference():
                     small_frame = cv2.resize(frame, (int(original_w * scale_factor), int(original_h * scale_factor)))
                     result = football_model.infer(small_frame, confidence=0.3)[0]
                     detections = sv.Detections.from_inference(result)
+                    # Scale back the coordinates to the original frame size
                     detections.xyxy = detections.xyxy / scale_factor
+                    
+                    # Loop through each detection and print if class is Player Red or Player Blue
+                    for class_name, bbox in zip(detections['class_name'], detections.xyxy):
+                        if class_name in ["Player Red", "Player Blue"]:
+                            x1, y1, x2, y2 = bbox
+                            # Calculate the center coordinates of the bounding box
+                            x_center = (x1 + x2) / 2.0
+                            y_center = (y1 + y2) / 2.0
+                            print(f"Detected {class_name} at x: {x_center:.2f}, y: {y_center:.2f}")
+                    
+                    # Continue with your existing processing:
                     ball_detections = detections[detections.class_id == BALL_ID]
                     ball_detections.xyxy = sv.pad_boxes(xyxy=ball_detections.xyxy, px=10)
                     all_detections = detections[detections.class_id != BALL_ID]
@@ -170,6 +182,7 @@ def football_inference():
                 except Exception as e:
                     print(f"[ERROR] Football inference error: {e}")
         time.sleep(0.03)
+
 
 # --- Button Command Functions ---
 def on_show_stream():

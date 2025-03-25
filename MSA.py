@@ -17,6 +17,8 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from datetime import datetime
 # For Roboflow football model inference (using inference-gpu)
 from inference import get_model
+import torch
+print("GPU available:", torch.cuda.is_available())
 
 # ------------------ Roboflow Model Setup ------------------
 ROBOFLOW_API_KEY = "tvZVhjN9hMWkURbVo84w"
@@ -75,13 +77,6 @@ yolo_thread = None
 football_thread = None
 football_model = None        # Will hold the loaded football model
 
-# Clustering globals (if needed)
-BATCH_SIZE = 32
-EMBEDDINGS_MODEL = SiglipVisionModel.from_pretrained('google/siglip-base-patch16-224').to('cuda' if torch.cuda.is_available() else 'cpu')
-EMBEDDINGS_PROCESSOR = AutoProcessor.from_pretrained('google/siglip-base-patch16-224')
-REDUCER = umap.UMAP(n_components=3)
-CLUSTERING_MODEL = KMeans(n_clusters=2)
-
 # Additional globals for football tracking and annotation
 BALL_ID = 0  # Assumed ball class ID
 tracker = sv.ByteTrack()  # Initialize ByteTrack tracker
@@ -102,7 +97,7 @@ collision_figure = plt.Figure(figsize=(5, 2), dpi=100)
 collision_canvas = None
 
 # Update delays (in ms)
-DISPLAY_UPDATE_DELAY = 33   # ~30 FPS for video update
+DISPLAY_UPDATE_DELAY = 10   # ~30 FPS for video update
 GRAPH_UPDATE_DELAY = 200    # Graphs update every 200ms
 
 # ------------------ Inference Functions ------------------
@@ -115,7 +110,7 @@ def football_inference():
     global latest_frame, annotated_frame, model_active, football_model, tracker, current_distance
     global collision_state, collision_start_time, current_collision_duration, collision_durations
     frame_counter = 0
-    process_every = 1
+    process_every = 2
     scale_factor = 0.5
 
     while model_active:

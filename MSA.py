@@ -223,7 +223,7 @@ class MainWindow(QtWidgets.QMainWindow):
         h_layout.setContentsMargins(10, 10, 10, 10)
         h_layout.setSpacing(10)
 
-        # --- Left Panel: Controls ---
+        # --- Left Panel: Controls and Distance Graph ---
         left_panel = QtWidgets.QWidget()
         left_layout = QtWidgets.QVBoxLayout(left_panel)
         left_layout.setContentsMargins(20, 20, 20, 20)
@@ -261,9 +261,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_reset_graph.clicked.connect(self.reset_graph)
         left_layout.addWidget(self.btn_reset_graph)
 
-        left_layout.addStretch()
+        # Add a vertical stretch to push subsequent widgets to the bottom.
+        left_layout.addStretch(1)
 
-        # --- Right Panel: Video Display and Graphs ---
+        # --- Add Distance Graph to Left Panel at the Bottom ---
+        self.distance_fig = plt.Figure(figsize=(5, 2), dpi=100)
+        self.distance_canvas = FigureCanvas(self.distance_fig)
+        # Optionally, you can set a minimum height to ensure visibility.
+        self.distance_canvas.setMinimumHeight(150)
+        left_layout.addWidget(self.distance_canvas)
+
+
+        # --- Right Panel: Video Display and Collision Graph ---
         right_panel = QtWidgets.QWidget()
         right_layout = QtWidgets.QVBoxLayout(right_panel)
         right_layout.setContentsMargins(10, 10, 10, 10)
@@ -276,13 +285,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.video_display.setFixedSize(800, 600)
         right_layout.addWidget(self.video_display)
 
-        # Graphs: Use two matplotlib canvases (collision graph above distance graph)
+        # Collision Graph Canvas uses available free space.
         self.collision_fig = plt.Figure(figsize=(5,2), dpi=100)
         self.collision_canvas = FigureCanvas(self.collision_fig)
         right_layout.addWidget(self.collision_canvas)
-        self.distance_fig = plt.Figure(figsize=(5,2), dpi=100)
-        self.distance_canvas = FigureCanvas(self.distance_fig)
-        right_layout.addWidget(self.distance_canvas)
 
         # Set up timers to update graphs periodically.
         self.graph_timer = QtCore.QTimer()
@@ -292,32 +298,50 @@ class MainWindow(QtWidgets.QMainWindow):
         # ------------------ Video Processor Thread ------------------
         self.video_thread = None
 
+
     def update_video_combo(self):
         files = get_video_files()
         self.video_combo.clear()
         if files:
             self.video_combo.addItems(files)
-            self.video_combo.setCurrentIndex(0)
         else:
             self.video_combo.addItem("")
+        # Add an extra option for entering a custom stream URL.
+        self.video_combo.addItem("Enter stream URL...")
+
 
     def toggle_stream(self, checked):
         if checked:
-            video_file = self.video_combo.currentText()
-            if video_file and os.path.exists(video_file):
-                self.video_thread = VideoProcessor(video_file)
-                self.video_thread.frame_ready.connect(self.update_video_display)
-                self.video_thread.error_signal.connect(self.handle_video_error)
-                # Set active model based on current selection.
-                active_model = self.model_combo.currentText()
-                if active_model == "None":
-                    active_model = None
-                self.video_thread.set_active_model(active_model)
-                self.video_thread.start()
-                self.btn_stream.setText("Stop Stream")
-            else:
-                QtWidgets.QMessageBox.warning(self, "Video File", "Selected video file not found.")
-                self.btn_stream.setChecked(False)
+            video_source = self.video_combo.currentText()
+            # Check if the user selected the custom URL option.
+            if video_source == "Enter stream URL...":
+                url, ok = QtWidgets.QInputDialog.getText(self, "Stream URL", "Enter RTMP stream URL:")
+                if ok and url:
+                    video_source = url
+                else:
+                    QtWidgets.QMessageBox.warning(self, "Stream URL", "No URL provided.")
+                    self.btn_stream.setChecked(False)
+                    return
+            
+            # If the source is not a URL, verify the file exists.
+            if not (video_source.startswith("rtmp://") or video_source.startswith("rtsp://") or 
+                    video_source.startswith("http://") or video_source.startswith("https://")):
+                if not os.path.exists(video_source):
+                    QtWidgets.QMessageBox.warning(self, "Video File", "Selected video file not found.")
+                    self.btn_stream.setChecked(False)
+                    return
+            
+            # Proceed to start the video stream.
+            self.video_thread = VideoProcessor(video_source)
+            self.video_thread.frame_ready.connect(self.update_video_display)
+            self.video_thread.error_signal.connect(self.handle_video_error)
+            # Set active model based on current selection.
+            active_model = self.model_combo.currentText()
+            if active_model == "None":
+                active_model = None
+            self.video_thread.set_active_model(active_model)
+            self.video_thread.start()
+            self.btn_stream.setText("Stop Stream")
         else:
             if self.video_thread:
                 self.video_thread.stop()
@@ -346,11 +370,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.video_display.setText("No Video")
 
     def update_graphs(self):
-        # Update distance graph
+        # Update distance graph (now in the left panel)
         self.distance_fig.clf()
         ax = self.distance_fig.add_subplot(111)
+        self.distance_fig.subplots_adjust(left=0.15, right=0.95, top=0.85, bottom=0.3)
         if current_distance is not None:
-            # Change color: red if below 50, otherwise blue.
             bar_color = 'red' if current_distance < 50 else 'blue'
             ax.bar(['Distance'], [current_distance], color=bar_color)
             ax.set_ylim(0, max(200, current_distance + 20))
@@ -360,15 +384,15 @@ class MainWindow(QtWidgets.QMainWindow):
             ax.text(0.5, 0.5, "Insufficient data", ha="center", va="center", fontsize=12)
         self.distance_canvas.draw()
 
-        # Update collision graph with a line plot instead of scatter
+        # Update collision graph (in the right panel)
         self.collision_fig.clf()
         ax2 = self.collision_fig.add_subplot(111)
+        self.collision_fig.subplots_adjust(left=0.15, right=0.95, top=0.85, bottom=0.3)
         if collision_durations:
             x_vals = list(range(1, len(collision_durations) + 1))
             ax2.plot(x_vals, collision_durations, color='red', marker='o', linestyle='-',
                     label="Finalized Collisions")
         if collision_state:
-            # Plot ongoing collision as a separate point
             ax2.plot([len(collision_durations) + 1], [current_collision_duration],
                     color='orange', marker='o', linestyle='None', label="Ongoing Collision")
         ax2.set_xlabel("Collision Event")
@@ -378,6 +402,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if handles:
             ax2.legend()
         self.collision_canvas.draw()
+
+
 
 
     def reset_graph(self):

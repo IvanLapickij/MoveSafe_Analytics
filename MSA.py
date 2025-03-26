@@ -150,6 +150,12 @@ class VideoProcessor(QtCore.QThread):
         self.capture = None
         # active_model can be None, "Players detection", or "YOLO Pose"
         self.active_model = None
+        # Recording attributes
+        self.recording = False
+        self.video_writer = None
+
+    def set_recording(self, record: bool):
+        self.recording = record
 
     def run(self):
         self.capture = cv2.VideoCapture(self.video_source)
@@ -177,6 +183,24 @@ class VideoProcessor(QtCore.QThread):
             prev_time = current_time
             cv2.putText(frame, f"FPS: {fps:.2f}", (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
+
+            # ----- Recording logic -----
+            if self.recording:
+                # Initialize VideoWriter if not already created.
+                if self.video_writer is None:
+                    h, w = frame.shape[:2]
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    if not os.path.exists("recordings"):
+                        os.makedirs("recordings")
+                    filename = os.path.join("recordings", f"recording_{timestamp}.avi")
+                    fourcc = cv2.VideoWriter_fourcc(*"XVID")
+                    self.video_writer = cv2.VideoWriter(filename, fourcc, 30, (w, h))
+                self.video_writer.write(frame)
+            else:
+                if self.video_writer is not None:
+                    self.video_writer.release()
+                    self.video_writer = None
+            # ---------------------------
 
             # Convert frame to QImage.
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -256,6 +280,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_model.clicked.connect(self.toggle_model)
         left_layout.addWidget(self.btn_model)
 
+        # Button to toggle video recording
+        self.btn_record = QtWidgets.QPushButton("Record Video")
+        self.btn_record.setCheckable(True)
+        self.btn_record.clicked.connect(self.toggle_recording)
+        left_layout.addWidget(self.btn_record)
+
         # Reset Graph button
         self.btn_reset_graph = QtWidgets.QPushButton("Reset Graph")
         self.btn_reset_graph.clicked.connect(self.reset_graph)
@@ -270,7 +300,6 @@ class MainWindow(QtWidgets.QMainWindow):
         # Optionally, you can set a minimum height to ensure visibility.
         self.distance_canvas.setMinimumHeight(150)
         left_layout.addWidget(self.distance_canvas)
-
 
         # --- Right Panel: Video Display and Collision Graph ---
         right_panel = QtWidgets.QWidget()
@@ -298,7 +327,6 @@ class MainWindow(QtWidgets.QMainWindow):
         # ------------------ Video Processor Thread ------------------
         self.video_thread = None
 
-
     def update_video_combo(self):
         files = get_video_files()
         self.video_combo.clear()
@@ -308,7 +336,6 @@ class MainWindow(QtWidgets.QMainWindow):
             self.video_combo.addItem("")
         # Add an extra option for entering a custom stream URL.
         self.video_combo.addItem("Enter stream URL...")
-
 
     def toggle_stream(self, checked):
         if checked:
@@ -322,7 +349,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     QtWidgets.QMessageBox.warning(self, "Stream URL", "No URL provided.")
                     self.btn_stream.setChecked(False)
                     return
-            
+
             # If the source is not a URL, verify the file exists.
             if not (video_source.startswith("rtmp://") or video_source.startswith("rtsp://") or 
                     video_source.startswith("http://") or video_source.startswith("https://")):
@@ -330,7 +357,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     QtWidgets.QMessageBox.warning(self, "Video File", "Selected video file not found.")
                     self.btn_stream.setChecked(False)
                     return
-            
+
             # Proceed to start the video stream.
             self.video_thread = VideoProcessor(video_source)
             self.video_thread.frame_ready.connect(self.update_video_display)
@@ -351,13 +378,26 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def toggle_model(self, checked):
         if self.video_thread:
-            active_model = self.model_combo.currentText()
-            if active_model == "None":
-                active_model = None
-            self.video_thread.set_active_model(active_model)
-            self.btn_model.setText("Model ON" if checked else "Run Model")
+            if checked:
+                active_model = self.model_combo.currentText()
+                if active_model == "None":
+                    active_model = None
+                self.video_thread.set_active_model(active_model)
+                self.btn_model.setText("Model ON")
+            else:
+                # Turn off the model when toggled off
+                self.video_thread.set_active_model(None)
+                self.btn_model.setText("Run Model")
         else:
             QtWidgets.QMessageBox.information(self, "No Stream", "Start the video stream first.")
+
+    def toggle_recording(self, checked):
+        if self.video_thread:
+            self.video_thread.set_recording(checked)
+            self.btn_record.setText("Stop Recording" if checked else "Record Video")
+        else:
+            QtWidgets.QMessageBox.information(self, "No Stream", "Start the video stream first.")
+            self.btn_record.setChecked(False)
 
     @QtCore.pyqtSlot(QtGui.QImage)
     def update_video_display(self, q_img):
@@ -379,7 +419,7 @@ class MainWindow(QtWidgets.QMainWindow):
             ax.bar(['Distance'], [current_distance], color=bar_color)
             ax.set_ylim(0, max(200, current_distance + 20))
             ax.set_ylabel("Distance (pixels)")
-            ax.set_title("Distance between Teams")
+            ax.set_title("Distance between Players")
         else:
             ax.text(0.5, 0.5, "Insufficient data", ha="center", va="center", fontsize=12)
         self.distance_canvas.draw()
@@ -391,10 +431,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if collision_durations:
             x_vals = list(range(1, len(collision_durations) + 1))
             ax2.plot(x_vals, collision_durations, color='red', marker='o', linestyle='-',
-                    label="Finalized Collisions")
+                     label="Finalized Collisions")
         if collision_state:
             ax2.plot([len(collision_durations) + 1], [current_collision_duration],
-                    color='orange', marker='o', linestyle='None', label="Ongoing Collision")
+                     color='orange', marker='o', linestyle='None', label="Ongoing Collision")
         ax2.set_xlabel("Collision Event")
         ax2.set_ylabel("Duration (s)")
         ax2.set_title("Collision Events (Duration)")
@@ -402,9 +442,6 @@ class MainWindow(QtWidgets.QMainWindow):
         if handles:
             ax2.legend()
         self.collision_canvas.draw()
-
-
-
 
     def reset_graph(self):
         global collision_state, collision_start_time, current_collision_duration, collision_durations

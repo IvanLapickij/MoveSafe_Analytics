@@ -6,12 +6,13 @@ HANDS_SIGN_MODEL = get_model(model_id=HANDS_SIGN_MODEL_ID, api_key=ROBOFLOW_API_
 # Print to confirm the model is loaded successfully
 print("Model loaded:", HANDS_SIGN_MODEL)
 pip install --upgrade inference
+
 #reference video https://blog.roboflow.com/getting-started-with-roboflow/
 #reference documentation https://docs.roboflow.com/workflows/deploy-a-workflow
 #reference Roboflow football project video https://www.youtube.com/watch?v=aBVGKoNZQUw&t
+
 #Check for devices(camera)
 #ffmpeg -list_devices true -f dshow -i dummy
-#videos\bundesliga1.mp4
 
 #1.Run Docker server clever_noether
 
@@ -22,7 +23,7 @@ ipconfig
 ffmpeg -f dshow -rtbufsize 256M -i video="Integrated Camera" -vf fps=10 -preset ultrafast -tune zerolatency -f flv rtmp://192.168.0.170:1935/stream
 
 #3. run python appclication#
-rtmp://192.168.247.179:1935/stream
+rtmp://192.168.0.32:1935/stream
 
 
 pip install PyQt5

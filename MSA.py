@@ -4,7 +4,7 @@ import cv2
 import time
 import numpy as np
 from datetime import datetime
-
+from ultralytics import YOLO
 from PyQt5 import QtCore, QtWidgets, QtGui
 
 import matplotlib.pyplot as plt
@@ -24,8 +24,8 @@ ROBOFLOW_API_KEY = "tvZVhjN9hMWkURbVo84w"
 PLAYER_DETECTION_MODEL_ID = "movesafep4/3"
 football_model = get_model(model_id=PLAYER_DETECTION_MODEL_ID, api_key=ROBOFLOW_API_KEY)
 
-# Dummy YOLO Pose loading (adjust as needed)
-yolo_model = None  # This will be loaded later if needed
+# YOLO Pose
+yolo_model = YOLO("yolo11n-pose.pt")
 
 # Setup annotators (used in football inference)
 ellipse_annotator = sv.EllipseAnnotator(
@@ -130,13 +130,18 @@ def run_football_inference(frame):
 
 def run_yolo_inference(frame):
     """
-    Process a frame with the YOLO Pose model.
-    (This dummy function just writes text on the frame.)
-    Replace with your actual YOLO inference code.
+    Process a frame with the YOLO Pose model and return an annotated frame.
     """
-    cv2.putText(frame, "YOLO Pose Inference", (50, 200),
-                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2, cv2.LINE_AA)
-    return frame
+    try:
+        # Run inference on the frame (you can add confidence settings as needed)
+        results = yolo_model.predict(frame, conf=0.5)  # or model(frame) depending on your ultralytics version
+        # The result is typically a list, so take the first index
+        annotated_frame = results[0].plot()  # This draws bounding boxes & keypoints on the frame
+        return annotated_frame
+
+    except Exception as e:
+        print(f"[ERROR] YOLO Pose inference error: {e}")
+        return frame  # If there is an error, return the original frame
 
 # ------------------ Video Processor Thread ------------------
 class VideoProcessor(QtCore.QThread):

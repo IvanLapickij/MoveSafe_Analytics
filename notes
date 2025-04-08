@@ -3,6 +3,8 @@ ROBOFLOW_API_KEY = os.getenv('ROBOFLOW_API_KEY', 'tvZVhjN9hMWkURbVo84w')
 HANDS_SIGN_MODEL_ID = "rock-paper-scissors-sxsw/14"
 HANDS_SIGN_MODEL = get_model(model_id=HANDS_SIGN_MODEL_ID, api_key=ROBOFLOW_API_KEY)
 
+#installs all libraries required for msa application
+pip install msa
 # Print to confirm the model is loaded successfully
 print("Model loaded:", HANDS_SIGN_MODEL)
 pip install --upgrade inference
@@ -25,5 +27,5 @@ ffmpeg -f dshow -rtbufsize 256M -i video="Integrated Camera" -vf fps=10 -preset 
 #3. run python appclication#
 rtmp://192.168.0.32:1935/stream
 
+pip install --upgrade inference
 
-pip install PyQt5

@@ -3,13 +3,18 @@ import cv2
 from ultralytics import YOLO
 
 class PoseDetector:
-    def __init__(self, model_path="yolo11n-pose.pt"):
-        self.model = YOLO(model_path)
+    def __init__(self, model=None):
+        if model is None:
+            # Create a default YOLO model if none is provided.
+            self.model = YOLO("yolo11n-pose.pt")
+        else:
+            self.model = model
 
     def predict(self, frame):
         try:
-            result = self.model.predict(frame, stream=False)[0]
-            return result.plot()
+            results = self.model.predict(frame, conf=0.5)
+            return results[0].plot()
         except Exception as e:
-            print(f"[PoseDetector] Error: {e}")
+            print(f"[YOLO Pose Error] {e}")
             return frame
+

@@ -201,7 +201,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 tracker.reset()
                 model = FootballDetector(rf_model, tracker, self.collision_tracker)
             elif selected_model == "YOLO Pose":
-                model = PoseDetector()
+                model = PoseDetector(pose_model)
+
 
             if model:
                 self.video_thread.set_model(model)

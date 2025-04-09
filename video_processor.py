@@ -5,6 +5,19 @@ from datetime import datetime
 from PyQt5 import QtCore, QtGui
 from threading import Lock
 
+class FrameRateController:
+    def __init__(self, target_fps):
+        self.interval = 1.0 / target_fps
+        self.last_display_time = 0
+
+    def should_display(self):
+        now = time.time()
+        if now - self.last_display_time >= self.interval:
+            self.last_display_time = now
+            return True
+        return False
+
+
 class VideoProcessor(QtCore.QThread):
     frame_ready = QtCore.pyqtSignal(QtGui.QImage)
     error_signal = QtCore.pyqtSignal(str)
@@ -28,12 +41,12 @@ class VideoProcessor(QtCore.QThread):
             self.error_signal.emit(f"Failed to open video source:\n{self.video_source}")
             return
 
+        self.fps_controller = FrameRateController(target_fps=30)
+
         frame_counter = 0
-        process_every = 2         # 👈 Inference every 2nd frame
-        display_every = 2         # 👈 GUI update every 2nd frame
+        process_every = 2
         prev_time = time.time()
         last_tracker_log_time = 0
-        last_fps_log_time = 0
 
         annotated_frame = None
 
@@ -48,10 +61,8 @@ class VideoProcessor(QtCore.QThread):
             with self.model_lock:
                 model = self.inference_model
 
-            # 🔧 Always start with the original frame
             annotated_frame = frame.copy()
 
-            # 🔧 Only apply model every N frames
             if model and frame_counter % process_every == 0:
                 try:
                     annotated_frame = model.predict(frame)
@@ -64,16 +75,14 @@ class VideoProcessor(QtCore.QThread):
                                 print(f"[TRACKER] Distance: {dist:.2f}")
                 except Exception as e:
                     print(f"[ERROR] Inference failed: {e}")
-                    # fallback is already frame.copy()
 
-            # 🔧 Show FPS regardless
+            # FPS
             current_time = time.time()
             fps = 1.0 / (current_time - prev_time) if (current_time - prev_time) > 0 else 0
             prev_time = current_time
             cv2.putText(annotated_frame, f"FPS: {fps:.2f}", (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
 
-            # Recording
             if self.recording:
                 if self.video_writer is None:
                     h, w = frame.shape[:2]
@@ -86,15 +95,13 @@ class VideoProcessor(QtCore.QThread):
                 self.video_writer.release()
                 self.video_writer = None
 
-            # 🔧 GUI display every N frames
-            if frame_counter % display_every == 0:
+            # 🔥 Real-time controlled GUI updates
+            if self.fps_controller.should_display():
                 rgb_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
                 h, w, ch = rgb_frame.shape
                 q_img = QtGui.QImage(rgb_frame.data, w, h, ch * w, QtGui.QImage.Format_RGB888)
                 scaled_img = q_img.scaled(800, 600, QtCore.Qt.KeepAspectRatio)
                 self.frame_ready.emit(scaled_img)
-
-            time.sleep(0.01)
 
         self.capture.release()
 

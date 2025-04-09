@@ -1,9 +1,9 @@
+import threading
 import cv2
 import time
 from datetime import datetime
 from PyQt5 import QtCore, QtGui
 from threading import Lock
-
 
 class VideoProcessor(QtCore.QThread):
     frame_ready = QtCore.pyqtSignal(QtGui.QImage)
@@ -17,10 +17,7 @@ class VideoProcessor(QtCore.QThread):
         self.capture = None
         self.recording = False
         self.video_writer = None
-
-        # 🔒 Add this to support safe model switching
         self.model_lock = Lock()
-
 
     def set_recording(self, record: bool):
         self.recording = record
@@ -31,27 +28,52 @@ class VideoProcessor(QtCore.QThread):
             self.error_signal.emit(f"Failed to open video source:\n{self.video_source}")
             return
 
-
+        frame_counter = 0
+        process_every = 2         # 👈 Inference every 2nd frame
+        display_every = 2         # 👈 GUI update every 2nd frame
         prev_time = time.time()
+        last_tracker_log_time = 0
+        last_fps_log_time = 0
+
+        annotated_frame = None
+
         while self._running:
             ret, frame = self.capture.read()
             if not ret:
                 self.error_signal.emit("End of video or stream error.")
                 break
 
+            frame_counter += 1
+
             with self.model_lock:
                 model = self.inference_model
 
-            if model:
-                frame = model.predict(frame)
+            # 🔧 Always start with the original frame
+            annotated_frame = frame.copy()
 
+            # 🔧 Only apply model every N frames
+            if model and frame_counter % process_every == 0:
+                try:
+                    annotated_frame = model.predict(frame)
+                    if hasattr(model, 'collision_tracker') and model.collision_tracker:
+                        now = time.time()
+                        if now - last_tracker_log_time >= 1.0:
+                            last_tracker_log_time = now
+                            dist = model.collision_tracker.current_distance
+                            if dist is not None:
+                                print(f"[TRACKER] Distance: {dist:.2f}")
+                except Exception as e:
+                    print(f"[ERROR] Inference failed: {e}")
+                    # fallback is already frame.copy()
 
+            # 🔧 Show FPS regardless
             current_time = time.time()
             fps = 1.0 / (current_time - prev_time) if (current_time - prev_time) > 0 else 0
             prev_time = current_time
-            cv2.putText(frame, f"FPS: {fps:.2f}", (10, 30),
+            cv2.putText(annotated_frame, f"FPS: {fps:.2f}", (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
 
+            # Recording
             if self.recording:
                 if self.video_writer is None:
                     h, w = frame.shape[:2]
@@ -59,28 +81,33 @@ class VideoProcessor(QtCore.QThread):
                     filename = f"recordings/recording_{timestamp}.avi"
                     fourcc = cv2.VideoWriter_fourcc(*"XVID")
                     self.video_writer = cv2.VideoWriter(filename, fourcc, 30, (w, h))
-                self.video_writer.write(frame)
+                self.video_writer.write(annotated_frame)
             elif self.video_writer:
                 self.video_writer.release()
                 self.video_writer = None
 
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            h, w, ch = rgb_frame.shape
-            q_img = QtGui.QImage(rgb_frame.data, w, h, ch * w, QtGui.QImage.Format_RGB888)
-            scaled_img = q_img.scaled(800, 600, QtCore.Qt.KeepAspectRatio)
-            self.frame_ready.emit(scaled_img)
-            time.sleep(0.03)
+            # 🔧 GUI display every N frames
+            if frame_counter % display_every == 0:
+                rgb_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
+                h, w, ch = rgb_frame.shape
+                q_img = QtGui.QImage(rgb_frame.data, w, h, ch * w, QtGui.QImage.Format_RGB888)
+                scaled_img = q_img.scaled(800, 600, QtCore.Qt.KeepAspectRatio)
+                self.frame_ready.emit(scaled_img)
+
+            time.sleep(0.01)
 
         self.capture.release()
+
+
 
     def stop(self):
         self._running = False
         self.wait()
 
     def set_inference_model(self, model):
-        self.inference_model = model
-        
-    def set_model(self, model):
         with self.model_lock:
             self.inference_model = model
 
+    def set_model(self, model):
+        with self.model_lock:
+            self.inference_model = model

@@ -186,7 +186,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
     def toggle_model(self, checked):
-        if self.video_thread:
+        if not self.video_thread:
+            QtWidgets.QMessageBox.information(self, "No Stream", "Start a stream first.")
+            self.btn_model.setChecked(False)
+            return
+
+        if checked:
             selected_model = self.model_combo.currentText()
             model = None
 
@@ -195,15 +200,18 @@ class MainWindow(QtWidgets.QMainWindow):
                 tracker = sv.ByteTrack()
                 tracker.reset()
                 model = FootballDetector(rf_model, tracker, self.collision_tracker)
-
             elif selected_model == "YOLO Pose":
-                yolo_pose_model = YOLO("yolo11n-pose.pt")  # or custom path
-                model = PoseDetector(yolo_pose_model)  # you must define this class (see below)
+                model = PoseDetector()
 
-            self.video_thread.set_model(model)
-            QtWidgets.QMessageBox.information(self, "Model Switched", f"Switched to: {selected_model}")
+            if model:
+                self.video_thread.set_model(model)
+                self.btn_model.setText("Model ON")
+                self.btn_model.setStyleSheet("background-color: #00aa00; color: white;")
         else:
-            QtWidgets.QMessageBox.information(self, "No Stream", "Start a stream first.")
+            self.video_thread.set_model(None)
+            self.btn_model.setText("Run Model")
+            self.btn_model.setStyleSheet("")
+
 
 
 

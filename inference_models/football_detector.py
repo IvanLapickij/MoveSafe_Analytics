@@ -2,13 +2,13 @@ import cv2
 import numpy as np
 import supervision as sv
 
+
 class FootballDetector:
-    def __init__(self, model, tracker, collision_tracker, scale_factor=0.5):
+    def __init__(self, model, tracker, collision_tracker=None, scale_factor=0.5):
         self.model = model
         self.tracker = tracker
         self.collision_tracker = collision_tracker
         self.scale_factor = scale_factor
-        self.ball_id = 0
 
         self.ellipse_annotator = sv.EllipseAnnotator(
             color=sv.ColorPalette.from_hex(['#00BFFF', '#FF1493', '#FFD700']),
@@ -27,46 +27,54 @@ class FootballDetector:
         )
 
     def predict(self, frame):
-        h, w = frame.shape[:2]
-        small_frame = cv2.resize(frame, (int(w * self.scale_factor), int(h * self.scale_factor)))
-
         try:
-            result = self.model.infer(small_frame, confidence=0.3)[0]
-        except Exception as e:
-            print(f"[ERROR] Football inference error: {e}")
-            return frame
+            BALL_ID = 0
+            original_h, original_w = frame.shape[:2]
+            small_frame = cv2.resize(
+                frame, (int(original_w * self.scale_factor), int(original_h * self.scale_factor))
+            )
 
-        detections = sv.Detections.from_inference(result)
-        detections.xyxy = detections.xyxy / self.scale_factor
+            # Inference call
+            inference_result = self.model.infer(small_frame, confidence=0.3)
 
-        red_positions, blue_positions = [], []
-        for class_name, bbox in zip(detections['class_name'], detections.xyxy):
-            x1, y1, x2, y2 = bbox
-            center = ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
-            if class_name == "Player Red":
-                red_positions.append(center)
-            elif class_name == "Player Blue":
-                blue_positions.append(center)
+            # Extract result (handle tuple or list from Roboflow)
+            result = inference_result[0] if isinstance(inference_result, (tuple, list)) else inference_result
 
-        if red_positions and blue_positions:
-            avg_red = np.mean(red_positions, axis=0)
-            avg_blue = np.mean(blue_positions, axis=0)
-            distance = np.linalg.norm(np.array(avg_red) - np.array(avg_blue))
-        else:
-            distance = None
+            # If result is a dict with "predictions"
+            if isinstance(result, dict) and "predictions" in result:
+                result = result["predictions"]
 
-        self.collision_tracker.update(distance)
+            # Convert to supervision detections
+            detections = sv.Detections.from_inference(result)
+            detections.xyxy = detections.xyxy / self.scale_factor  # scale back to original resolution
 
-        ball_detections = detections[detections.class_id == self.ball_id]
-        ball_detections.xyxy = sv.pad_boxes(xyxy=ball_detections.xyxy, px=10)
-        player_detections = detections[detections.class_id != self.ball_id].with_nms(threshold=0.5, class_agnostic=True)
-        player_detections.class_id -= 1
+            # Separate and annotate ball vs players
+            ball_detections = detections[detections.class_id == BALL_ID]
+            ball_detections.xyxy = sv.pad_boxes(xyxy=ball_detections.xyxy, px=10)
 
-        tracked = self.tracker.update_with_detections(detections=player_detections)
-        labels = [f"#{id}" for id in tracked.tracker_id]
+            player_detections = detections[detections.class_id != BALL_ID]
+            player_detections = player_detections.with_nms(threshold=0.5, class_agnostic=True)
+            player_detections.class_id -= 1  # Adjust if needed
 
-        annotated = self.ellipse_annotator.annotate(scene=frame.copy(), detections=tracked)
-        annotated = self.label_annotator.annotate(scene=annotated, detections=tracked, labels=labels)
-        annotated = self.triangle_annotator.annotate(scene=annotated, detections=ball_detections)
+            # Update tracker
+            tracked = self.tracker.update_with_detections(player_detections)
+            labels = [f"#{id}" for id in tracked.tracker_id]
 
-        return annotated
+            # Update collision tracker with pairwise distance
+            if self.collision_tracker and len(tracked.xyxy) >= 2:
+                centers = np.array([
+                    [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2]
+                    for box in tracked.xyxy
+                ])
+                dists = np.linalg.norm(centers[0] - centers[1], ord=2)
+                self.collision_tracker.update(dists)
+
+            # Final annotation
+            annotated = self.ellipse_annotator.annotate(frame.copy(), tracked)
+            annotated = self.label_annotator.annotate(annotated, tracked, labels)
+            annotated = self.triangle_annotator.annotate(annotated, ball_detections)
+
+            return annotated
+
+        except Exception:
+            return frame  # fallback to unmodified frame if anything fails
